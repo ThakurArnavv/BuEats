@@ -102,20 +102,54 @@ export default function App() {
   const [currentOrderProgressId, setCurrentOrderProgressId] = useState(null);
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
   
+  // Auth state
+  const [isLoginMode, setIsLoginMode] = useState(true);
+  const [authError, setAuthError] = useState('');
+
   // Shop Owner State
   const [shopView, setShopView] = useState('orders'); // 'orders' or 'menu'
   const [editingItem, setEditingItem] = useState(null);
 
-  const handleLogin = (e) => {
+  const handleAuthSubmit = async (e) => {
     e.preventDefault();
-    const userData = {
-      id: user.role === 'shop' ? loginForm.username.toLowerCase() : 'student_demo',
-      role: user.role,
-      name: loginForm.username
-    };
-    setUser(userData);
-    setView(userData.role === 'shop' ? 'shop-dash' : 'student-dash');
-    setShopView('orders');
+    setAuthError('');
+    
+    const endpoint = isLoginMode ? '/api/auth/login' : '/api/auth/register';
+    
+    try {
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: loginForm.username,
+          password: loginForm.password,
+          role: user.role
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(data.error || 'Authentication failed');
+      }
+      
+      if (isLoginMode) {
+        localStorage.setItem('token', data.token);
+        const userData = {
+          id: data.user.role === 'shop' ? data.user.username : 'student_demo',
+          role: data.user.role,
+          name: data.user.username
+        };
+        setUser(userData);
+        setView(userData.role === 'shop' ? 'shop-dash' : 'student-dash');
+        setShopView('orders');
+      } else {
+        setIsLoginMode(true);
+        setAuthError('Registration successful. Please log in.');
+      }
+    } catch (err) {
+      setAuthError(err.message);
+    }
   };
 
   const handleLogout = () => {
@@ -125,6 +159,7 @@ export default function App() {
     setCurrentOrderProgressId(null);
     setLoginForm({ username: '', password: '' });
     setView('login');
+    localStorage.removeItem('token');
   };
 
   const addToCart = (item) => {
@@ -135,21 +170,96 @@ export default function App() {
     });
   };
 
-  const handlePlaceOrder = () => {
-    const newOrder = {
-      id: Math.floor(1000 + Math.random() * 9000),
-      shopId: selectedShopId,
-      items: [...cart],
-      total: cart.reduce((s, i) => s + (i.price * i.quantity), 0),
-      status: 'placed',
-      timestamp: Date.now()
-    };
-    setOrders([...orders, newOrder]);
-    setCurrentOrderProgressId(newOrder.id);
-    setCart([]);
+  // --- REAL-TIME ORDER POLLING ---
+  useEffect(() => {
+    let intervalId;
+    if (view !== 'login' && user.id) {
+      const fetchOrders = async () => {
+        try {
+          const token = localStorage.getItem('token');
+          if (!token) return;
+
+          const endpoint = user.role === 'shop' ? '/api/orders/shop' : '/api/orders/student';
+          const res = await fetch(endpoint, {
+            headers: { 'Authorization': `Bearer ${token}` }
+          });
+          
+          if (res.ok) {
+            const data = await res.json();
+            setOrders(data);
+            
+            // Auto-sync current student active order progress
+            if (user.role === 'student' && data.length > 0) {
+              const latestOrder = data[0]; // newest first
+              if (['placed', 'preparing', 'ready'].includes(latestOrder.status)) {
+                 setCurrentOrderProgressId(latestOrder._id);
+              }
+            }
+          }
+        } catch (err) {
+          console.error("Failed to poll orders", err);
+        }
+      };
+
+      fetchOrders(); // Initial fetch
+      intervalId = setInterval(fetchOrders, 3000); // Poll every 3 seconds
+    }
+    return () => clearInterval(intervalId);
+  }, [view, user.id, user.role]);
+
+  const handlePlaceOrder = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({
+          shopId: selectedShopId,
+          items: cart,
+          total: cart.reduce((s, i) => s + (i.price * i.quantity), 0)
+        })
+      });
+
+      if (res.ok) {
+        const newOrder = await res.json();
+        setCart([]);
+        setCurrentOrderProgressId(newOrder._id);
+        // Instant visual feedback before next poll
+        setOrders(prev => [newOrder, ...prev]); 
+      }
+    } catch (err) {
+      console.error("Failed to place order", err);
+    }
+  };
+
+  const updateOrderStatus = async (orderId, newStatus) => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/orders/${orderId}/status`, {
+        method: 'PUT',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}` 
+        },
+        body: JSON.stringify({ status: newStatus })
+      });
+      
+      if (res.ok) {
+        // Optimistic UI update
+        setOrders(orders.map(o => o._id === orderId ? {...o, status: newStatus} : o));
+      }
+    } catch (err) {
+      console.error("Failed to update status", err);
+    }
   };
 
   const handleOrderDone = () => {
+    if (currentOrderProgressId) {
+      updateOrderStatus(currentOrderProgressId, 'completed');
+    }
     setCurrentOrderProgressId(null);
     setSelectedShopId(null);
     setView('student-dash');
@@ -174,7 +284,7 @@ export default function App() {
     setMenus({ ...menus, [user.id]: updatedMenu });
   };
 
-  const activeOrder = orders.find(o => o.id === currentOrderProgressId);
+  const activeOrder = orders.find(o => o._id === currentOrderProgressId);
   const cartTotal = cart.reduce((s, i) => s + (i.price * i.quantity), 0);
 
   if (view === 'login') {
@@ -201,7 +311,8 @@ export default function App() {
               Shop Owner
             </button>
           </div>
-          <form onSubmit={handleLogin} className="space-y-6">
+          <form onSubmit={handleAuthSubmit} className="space-y-6">
+            {authError && <div className={`p-3 rounded-xl text-sm font-bold text-center ${authError.includes('successful') ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>{authError}</div>}
             <div className="space-y-2">
                <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">{user.role === 'shop' ? 'Shop ID (e.g. snapeats)' : 'Student ID'}</label>
                <input 
@@ -221,9 +332,13 @@ export default function App() {
               placeholder="Password" 
               required 
             />
-            <button type="submit" className="w-full bg-orange-500 py-4 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-orange-400 transition-all shadow-xl shadow-orange-500/20">Sign In</button>
+            <button type="submit" className="w-full bg-orange-500 py-4 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-orange-400 transition-all shadow-xl shadow-orange-500/20">{isLoginMode ? 'Sign In' : 'Register'}</button>
           </form>
-          <p className="mt-6 text-center text-xs text-gray-500 font-bold uppercase tracking-widest">Demo: Enter shop name as ID</p>
+          <div className="mt-6 text-center">
+            <button type="button" onClick={() => { setIsLoginMode(!isLoginMode); setAuthError(''); }} className="text-xs text-gray-500 font-bold uppercase tracking-widest hover:text-white transition-colors">
+              {isLoginMode ? 'Need an account? Register' : 'Already have an account? Sign In'}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -245,9 +360,9 @@ export default function App() {
       {/* Sidebar - Shop Context */}
       {user.role === 'shop' && (
         <aside className="fixed left-0 top-0 h-screen w-64 bg-[#0B1221] border-r border-white/5 flex flex-col z-50">
-          <div className="p-8 flex items-center gap-3">
-            <FlameIcon />
-            <span className="text-xl font-black tracking-tight text-white uppercase">{user.id}</span>
+          <div className="p-8 flex items-center gap-3 w-full overflow-hidden">
+            <div className="flex-shrink-0"><FlameIcon /></div>
+            <span className="text-xl font-black tracking-tight text-white uppercase truncate" title={user.id}>{user.id}</span>
           </div>
           <nav className="flex-1 px-4 py-4 space-y-4">
             <button 
@@ -351,16 +466,16 @@ export default function App() {
                 <div className="py-32 text-center opacity-20"><p className="text-xl font-black uppercase tracking-widest">No incoming orders</p></div>
               ) : (
                 orders.filter(o => o.shopId === user.id).map(order => (
-                  <div key={order.id} className={`bg-[#111727] p-8 rounded-[2rem] border border-white/5 flex justify-between items-center ${order.status === 'ready' ? 'opacity-40' : ''}`}>
+                  <div key={order._id} className={`bg-[#111727] p-8 rounded-[2rem] border border-white/5 flex justify-between items-center ${order.status === 'ready' ? 'opacity-40' : ''}`}>
                     <div>
-                      <span className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-1 block">Order #{order.id}</span>
+                      <span className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-1 block">Order #{order._id.substring(order._id.length - 4)}</span>
                       <ul className="space-y-1">
                         {order.items.map((i, idx) => <li key={idx} className="font-black text-xl">{i.quantity}x {i.name}</li>)}
                       </ul>
                     </div>
                     {order.status === 'placed' && (
                       <button 
-                        onClick={() => setOrders(orders.map(o => o.id === order.id ? {...o, status: 'ready'} : o))}
+                        onClick={() => updateOrderStatus(order._id, 'ready')}
                         className="bg-green-500 px-8 py-4 rounded-xl font-black uppercase text-xs"
                       >
                         Mark Ready
@@ -442,31 +557,37 @@ export default function App() {
         </div>
       )}
 
-      {/* Progress Overlays */}
+      {/* Progress Overlays - Floating Tracker Widget */}
       {activeOrder && activeOrder.status === 'placed' && (
-        <div className="fixed inset-0 bg-black/95 backdrop-blur-xl z-[100] flex items-center justify-center p-6">
-           <div className="bg-[#111727] p-12 rounded-[3rem] border border-white/5 w-full max-w-md text-center shadow-2xl">
-              <div className="relative w-20 h-20 mx-auto mb-10">
-                <div className="absolute inset-0 bg-orange-500/20 rounded-full animate-ping"></div>
-                <div className="relative w-full h-full bg-orange-500/40 rounded-full flex items-center justify-center text-3xl">👨‍🍳</div>
-              </div>
-              <h2 className="text-3xl font-black tracking-tight mb-2">Preparing Your Order</h2>
-              <p className="text-gray-500 font-bold text-xs uppercase tracking-widest mb-8">Order #{activeOrder.id}</p>
-              <div className="p-4 bg-white/5 rounded-2xl border border-white/5">
-                <p className="text-[10px] text-gray-400 font-bold">Please wait. The kitchen is busy at {shopDetails[activeOrder.shopId]?.name}.</p>
-              </div>
-           </div>
+        <div className="fixed bottom-6 right-6 bg-[#111727] p-8 rounded-[2.5rem] border border-white/10 w-80 shadow-2xl shadow-black/50 z-[100] transform transition-all hover:scale-105">
+          <div className="relative w-16 h-16 mx-auto mb-6">
+            <div className="absolute inset-0 bg-orange-500/20 rounded-full animate-ping"></div>
+            <div className="relative w-full h-full bg-orange-500/40 rounded-full flex items-center justify-center text-2xl">👨‍🍳</div>
+          </div>
+          <div className="text-center">
+            <h2 className="text-xl font-black tracking-tight mb-1">Preparing Order</h2>
+            <p className="text-gray-500 font-bold text-[10px] uppercase tracking-widest mb-6">Order #{activeOrder._id.substring(activeOrder._id.length - 4)}</p>
+            <div className="p-3 bg-white/5 rounded-xl border border-white/5">
+              <p className="text-[10px] text-gray-400 font-bold leading-relaxed">
+                The kitchen is busy at <span className="text-white">{shopDetails[activeOrder.shopId]?.name}</span>.
+              </p>
+            </div>
+          </div>
         </div>
       )}
 
       {activeOrder && activeOrder.status === 'ready' && (
-        <div className="fixed inset-0 bg-green-500/10 backdrop-blur-3xl z-[100] flex items-center justify-center p-6">
-           <div className="bg-white text-black p-12 rounded-[3.5rem] w-full max-w-md text-center shadow-2xl">
-              <div className="text-6xl mb-6">🥡</div>
-              <h2 className="text-4xl font-black tracking-tighter mb-2">Order Ready!</h2>
-              <p className="text-gray-500 font-bold text-sm mb-10">Head to {shopDetails[activeOrder.shopId]?.name} for pickup.</p>
-              <button onClick={handleOrderDone} className="w-full bg-black text-white py-6 rounded-3xl font-black uppercase tracking-widest text-xs">Got it!</button>
-           </div>
+        <div className="fixed bottom-6 right-6 bg-white text-black p-8 rounded-[2.5rem] w-80 shadow-2xl shadow-green-500/20 z-[100] animate-bounce">
+          <div className="text-center">
+            <div className="text-5xl mb-4">🥡</div>
+            <h2 className="text-3xl font-black tracking-tighter mb-1">Order Ready!</h2>
+            <p className="text-gray-600 font-bold text-xs mb-8 leading-relaxed">
+              Head to <span className="text-green-600">{shopDetails[activeOrder.shopId]?.name}</span> for pickup.
+            </p>
+            <button onClick={handleOrderDone} className="w-full bg-black text-white py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-lg hover:bg-gray-900 transition-all">
+              Got it!
+            </button>
+          </div>
         </div>
       )}
     </div>
