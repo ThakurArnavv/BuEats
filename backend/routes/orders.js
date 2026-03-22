@@ -22,7 +22,7 @@ router.post('/', async (req, res) => {
       shopId,
       items,
       total,
-      status: 'placed'
+      status: 'pending'
     });
 
     await newOrder.save();
@@ -33,12 +33,11 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Get all orders for the current student
+// Get all orders for the current student (order history, sorted newest first)
 router.get('/student', async (req, res) => {
   try {
     if (req.user.role !== 'student') return res.status(403).json({ error: 'Unauthorized' });
     
-    // Sort by newest first
     const orders = await Order.find({ studentId: req.user.username }).sort({ createdAt: -1 });
     res.json(orders);
   } catch (error) {
@@ -51,10 +50,8 @@ router.get('/shop', async (req, res) => {
   try {
     if (req.user.role !== 'shop') return res.status(403).json({ error: 'Unauthorized' });
 
-    // Shop owners ID is their username in this architecture
     const shopIdPrefix = req.user.username.split('@')[0].toLowerCase();
     
-    // Match exact username or the prefix before @ in lowercase
     const orders = await Order.find({ 
       $or: [
         { shopId: req.user.username }, 
@@ -68,11 +65,71 @@ router.get('/shop', async (req, res) => {
   }
 });
 
+// Accept an order and set expected time
+router.put('/:id/accept', async (req, res) => {
+    try {
+        if (req.user.role !== 'shop') return res.status(403).json({ error: 'Unauthorized. Only shops can accept orders.' });
+        
+        const { expectedPreparationTime } = req.body;
+        if (expectedPreparationTime === undefined || expectedPreparationTime < 0) {
+            return res.status(400).json({ error: 'Valid expectedPreparationTime (in minutes) is required to accept an order' });
+        }
+
+        const order = await Order.findById(req.params.id);
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        const shopIdPrefix = req.user.username.split('@')[0].toLowerCase();
+        if (order.shopId !== req.user.username && order.shopId.toLowerCase() !== shopIdPrefix) {
+           return res.status(403).json({ error: 'Not authorized to edit this order' });
+        }
+
+        if (order.status !== 'pending') {
+            return res.status(400).json({ error: 'Can only accept pending orders' });
+        }
+
+        order.status = 'accepted';
+        order.expectedPreparationTime = expectedPreparationTime;
+        await order.save();
+
+        res.json(order);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Failed to accept order' });
+    }
+});
+
+// Reject an order
+router.put('/:id/reject', async (req, res) => {
+    try {
+        if (req.user.role !== 'shop') return res.status(403).json({ error: 'Unauthorized. Only shops can reject orders.' });
+
+        const order = await Order.findById(req.params.id);
+        if (!order) return res.status(404).json({ error: 'Order not found' });
+
+        const shopIdPrefix = req.user.username.split('@')[0].toLowerCase();
+        if (order.shopId !== req.user.username && order.shopId.toLowerCase() !== shopIdPrefix) {
+           return res.status(403).json({ error: 'Not authorized to edit this order' });
+        }
+
+        if (order.status !== 'pending') {
+            return res.status(400).json({ error: 'Can only reject pending orders' });
+        }
+
+        order.status = 'cancelled';
+        await order.save();
+
+        res.json(order);
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: 'Failed to reject order' });
+    }
+});
+
 // Update an order's status
 router.put('/:id/status', async (req, res) => {
     try {
       const { status } = req.body;
-      const validStatuses = ['placed', 'preparing', 'ready', 'completed'];
+      const validStatuses = ['pending', 'placed', 'accepted', 'preparing', 'ready', 'completed', 'cancelled'];
 
       if (!validStatuses.includes(status)) {
          return res.status(400).json({ error: 'Invalid status string' });
@@ -81,7 +138,6 @@ router.put('/:id/status', async (req, res) => {
       const order = await Order.findById(req.params.id);
       if (!order) return res.status(404).json({ error: 'Order not found' });
 
-      // Assuming we only let shop owners update order statuses for their own shop
       const shopIdPrefix = req.user.username.split('@')[0].toLowerCase();
       if (req.user.role === 'shop' && 
           order.shopId !== req.user.username && 

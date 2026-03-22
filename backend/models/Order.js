@@ -11,10 +11,12 @@ const orderSchema = new mongoose.Schema({
   studentId: {
     type: String,
     required: true,
+    index: true,
   },
   shopId: {
     type: String,
     required: true,
+    index: true,
   },
   items: [orderItemSchema],
   total: {
@@ -23,8 +25,12 @@ const orderSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['placed', 'preparing', 'ready', 'completed'],
-    default: 'placed'
+    enum: ['pending', 'placed', 'accepted', 'preparing', 'ready', 'completed', 'cancelled'],
+    default: 'pending'
+  },
+  expectedPreparationTime: {
+    type: Number,
+    min: 0
   }
 }, { timestamps: true });
 
