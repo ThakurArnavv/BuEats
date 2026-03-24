@@ -34,6 +34,26 @@ const HistoryIcon = () => (
   </svg>
 );
 
+const StarIcon = ({ filled, half, onClick, onMouseEnter, onMouseLeave, size = 'w-8 h-8' }) => (
+  <svg
+    className={`${size} cursor-pointer transition-all duration-200 hover:scale-125 ${filled ? 'text-yellow-400 drop-shadow-[0_0_6px_rgba(250,204,21,0.5)]' : 'text-gray-600'}`}
+    fill={filled ? 'currentColor' : 'none'}
+    stroke="currentColor"
+    viewBox="0 0 24 24"
+    onClick={onClick}
+    onMouseEnter={onMouseEnter}
+    onMouseLeave={onMouseLeave}
+  >
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" />
+  </svg>
+);
+
+const ReviewsIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+  </svg>
+);
+
 // --- STATUS BADGE ---
 const StatusBadge = ({ status }) => {
   const colors = {
@@ -120,6 +140,21 @@ export default function App() {
   const [editingItem, setEditingItem] = useState(null);
   const [acceptingOrderId, setAcceptingOrderId] = useState(null);
   const [prepTime, setPrepTime] = useState('');
+
+  // Review System State
+  const [showReviewPopup, setShowReviewPopup] = useState(false);
+  const [reviewOrderId, setReviewOrderId] = useState(null);
+  const [reviewRating, setReviewRating] = useState(0);
+  const [reviewHoverRating, setReviewHoverRating] = useState(0);
+  const [reviewComment, setReviewComment] = useState('');
+  const [reviewIssues, setReviewIssues] = useState([]);
+  const [reviewStep, setReviewStep] = useState('rate'); // 'rate' | 'followup' | 'done'
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewedOrderIds, setReviewedOrderIds] = useState(new Set());
+  const [shopReviews, setShopReviews] = useState([]);
+  const [replyingReviewId, setReplyingReviewId] = useState(null);
+  const [replyText, setReplyText] = useState('');
+  const [editingReview, setEditingReview] = useState(null);
 
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -352,12 +387,141 @@ export default function App() {
   };
 
   const handleOrderDone = () => {
-    if (currentOrderProgressId) {
-      updateOrderStatus(currentOrderProgressId, 'completed');
+    const orderId = currentOrderProgressId;
+    if (orderId) {
+      updateOrderStatus(orderId, 'completed');
+      // Trigger review popup after marking completed
+      setTimeout(() => {
+        if (!reviewedOrderIds.has(orderId)) {
+          setReviewOrderId(orderId);
+          setReviewRating(0);
+          setReviewHoverRating(0);
+          setReviewComment('');
+          setReviewIssues([]);
+          setReviewStep('rate');
+          setShowReviewPopup(true);
+        }
+      }, 800);
     }
     setCurrentOrderProgressId(null);
     setSelectedShopId(null);
     setView('student-dash');
+  };
+
+  // --- REVIEW SYSTEM ---
+  const handleSubmitReview = async () => {
+    if (!reviewOrderId || reviewRating === 0) return;
+    setReviewSubmitting(true);
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/reviews', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          orderId: reviewOrderId,
+          rating: reviewRating,
+          comment: reviewComment,
+          issues: reviewIssues,
+          addedToFavorites: false,
+        })
+      });
+      if (res.ok) {
+        setReviewedOrderIds(prev => new Set([...prev, reviewOrderId]));
+        if (reviewRating >= 4) {
+          setReviewStep('followup-good');
+        } else if (reviewRating <= 2) {
+          setReviewStep('followup-bad');
+        } else {
+          setReviewStep('done');
+        }
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to submit review');
+      }
+    } catch (err) {
+      console.error('Review submit error:', err);
+    }
+    setReviewSubmitting(false);
+  };
+
+  const handleEditReview = async () => {
+    if (!editingReview) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/reviews/${editingReview._id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({
+          rating: editingReview.rating,
+          comment: editingReview.comment,
+          issues: editingReview.issues,
+        })
+      });
+      if (res.ok) {
+        setEditingReview(null);
+        alert('Review updated!');
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Failed to edit review');
+      }
+    } catch (err) {
+      console.error('Review edit error:', err);
+    }
+  };
+
+  const closeReviewPopup = () => {
+    setShowReviewPopup(false);
+    setReviewOrderId(null);
+    setReviewStep('rate');
+  };
+
+  // Fetch reviews for shop owner
+  const fetchShopReviews = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/reviews/shop/${user.id}`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setShopReviews(data);
+      }
+    } catch (err) {
+      console.error('Fetch reviews error:', err);
+    }
+  };
+
+  useEffect(() => {
+    if (user.role === 'shop' && shopView === 'reviews') {
+      fetchShopReviews();
+      const id = setInterval(fetchShopReviews, 10000);
+      return () => clearInterval(id);
+    }
+  }, [user.role, shopView, user.id]);
+
+  const handleShopReply = async (reviewId) => {
+    if (!replyText.trim()) return;
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch(`/api/reviews/${reviewId}/reply`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ reply: replyText })
+      });
+      if (res.ok) {
+        setReplyingReviewId(null);
+        setReplyText('');
+        fetchShopReviews();
+      }
+    } catch (err) {
+      console.error('Reply error:', err);
+    }
+  };
+
+  const toggleIssue = (issue) => {
+    setReviewIssues(prev =>
+      prev.includes(issue) ? prev.filter(i => i !== issue) : [...prev, issue]
+    );
   };
 
   // --- MENU MANAGEMENT WITH API ---
@@ -417,6 +581,7 @@ export default function App() {
     if (user.role === 'shop') {
       if (shopView === 'orders') return 'Active Orders';
       if (shopView === 'history') return 'Order History';
+      if (shopView === 'reviews') return 'Customer Reviews';
       return 'Menu Management';
     }
     if (view === 'student-dash') return 'Food Outlets';
@@ -523,6 +688,13 @@ export default function App() {
             >
               <HistoryIcon />
               Order History
+            </button>
+            <button 
+              onClick={() => setShopView('reviews')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${shopView === 'reviews' ? 'bg-orange-500 text-white' : 'text-gray-400'}`}
+            >
+              <ReviewsIcon />
+              Reviews
             </button>
           </nav>
           <div className="p-6 border-t border-white/5">
@@ -822,6 +994,116 @@ export default function App() {
               </div>
             </div>
           )}
+
+          {/* ===== SHOP REVIEWS VIEW ===== */}
+          {user.role === 'shop' && shopView === 'reviews' && (
+            <div className="max-w-4xl space-y-6">
+              {shopReviews.length === 0 ? (
+                <div className="py-32 text-center opacity-20">
+                  <p className="text-xl font-black uppercase tracking-widest">No reviews yet</p>
+                  <p className="text-sm text-gray-500 mt-2">Customer reviews will appear here after deliveries.</p>
+                </div>
+              ) : (
+                <>
+                  {/* Stats Summary */}
+                  <div className="bg-[#111727] p-8 rounded-[2rem] border border-white/5 mb-2">
+                    <div className="flex items-center gap-8">
+                      <div className="text-center">
+                        <p className="text-5xl font-black text-yellow-400">
+                          {(shopReviews.reduce((s, r) => s + r.rating, 0) / shopReviews.length).toFixed(1)}
+                        </p>
+                        <div className="flex justify-center mt-2">
+                          {[1,2,3,4,5].map(s => (
+                            <StarIcon key={s} filled={s <= Math.round(shopReviews.reduce((a, r) => a + r.rating, 0) / shopReviews.length)} size="w-5 h-5" />
+                          ))}
+                        </div>
+                        <p className="text-gray-500 text-xs font-bold mt-2">{shopReviews.length} review{shopReviews.length !== 1 ? 's' : ''}</p>
+                      </div>
+                      <div className="flex-1 space-y-1">
+                        {[5,4,3,2,1].map(star => {
+                          const count = shopReviews.filter(r => r.rating === star).length;
+                          const pct = shopReviews.length > 0 ? (count / shopReviews.length * 100) : 0;
+                          return (
+                            <div key={star} className="flex items-center gap-3">
+                              <span className="text-xs font-bold text-gray-400 w-3">{star}</span>
+                              <StarIcon filled size="w-3.5 h-3.5" />
+                              <div className="flex-1 bg-white/5 rounded-full h-2 overflow-hidden">
+                                <div className="bg-yellow-400 h-full rounded-full transition-all duration-500" style={{width: `${pct}%`}} />
+                              </div>
+                              <span className="text-[10px] font-bold text-gray-500 w-8 text-right">{count}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em] px-1">Respond to customer feedback to improve trust</p>
+
+                  {/* Individual Reviews */}
+                  {shopReviews.map(review => (
+                    <div key={review._id} className="bg-[#111727] p-8 rounded-[2rem] border border-white/5">
+                      <div className="flex justify-between items-start mb-3">
+                        <div>
+                          <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block">{review.studentId}</span>
+                          <div className="flex items-center gap-1 mt-1">
+                            {[1,2,3,4,5].map(s => <StarIcon key={s} filled={s <= review.rating} size="w-4 h-4" />)}
+                          </div>
+                        </div>
+                        <span className="text-gray-500 text-xs font-bold">
+                          {new Date(review.createdAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}
+                        </span>
+                      </div>
+
+                      {review.comment && <p className="text-gray-300 text-sm mb-3 leading-relaxed">{review.comment}</p>}
+
+                      {review.issues && review.issues.length > 0 && (
+                        <div className="flex flex-wrap gap-2 mb-3">
+                          {review.issues.map(issue => (
+                            <span key={issue} className="px-3 py-1 bg-red-500/10 text-red-400 rounded-lg text-[10px] font-black uppercase tracking-widest">{issue}</span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Shop Reply */}
+                      {review.shopReply ? (
+                        <div className="mt-4 p-4 bg-orange-500/5 border border-orange-500/10 rounded-xl">
+                          <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-1">Your Reply</p>
+                          <p className="text-gray-300 text-sm">{review.shopReply}</p>
+                        </div>
+                      ) : (
+                        <div className="mt-4">
+                          {replyingReviewId === review._id ? (
+                            <div className="space-y-3">
+                              <textarea
+                                value={replyText}
+                                onChange={(e) => setReplyText(e.target.value)}
+                                placeholder="Write your reply..."
+                                rows="2"
+                                className="w-full px-4 py-3 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold text-sm resize-none"
+                                autoFocus
+                              />
+                              <div className="flex gap-3">
+                                <button onClick={() => handleShopReply(review._id)} className="bg-orange-500 px-5 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-orange-400 transition-all">Send Reply</button>
+                                <button onClick={() => { setReplyingReviewId(null); setReplyText(''); }} className="bg-white/5 px-5 py-2.5 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition-all">Cancel</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => { setReplyingReviewId(review._id); setReplyText(''); }}
+                              className="text-[10px] font-black text-orange-500 uppercase tracking-widest hover:text-orange-400 transition-colors"
+                            >
+                              Reply to this review →
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
+            </div>
+          )}
         </div>
       </main>
 
@@ -929,6 +1211,165 @@ export default function App() {
             <button onClick={handleOrderDone} className="w-full bg-black text-white py-4 rounded-2xl font-black uppercase tracking-widest text-[10px] shadow-lg hover:bg-gray-900 transition-all">
               Got it!
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* ===== REVIEW POPUP MODAL ===== */}
+      {showReviewPopup && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[200] flex items-center justify-center p-6">
+          <div className="bg-[#111727] rounded-[2.5rem] border border-white/5 w-full max-w-md shadow-2xl shadow-black/50 overflow-hidden">
+            {/* Header gradient bar */}
+            <div className="h-1.5 bg-gradient-to-r from-yellow-400 via-orange-500 to-red-500" />
+            
+            <div className="p-10">
+              {/* Step: Rate */}
+              {reviewStep === 'rate' && (
+                <div className="text-center">
+                  <div className="text-5xl mb-4">🍽️</div>
+                  <h3 className="text-2xl font-black tracking-tight mb-2">
+                    How was your order{orders.find(o => o._id === reviewOrderId)?.shopId ? ` from ${shopDetails[orders.find(o => o._id === reviewOrderId)?.shopId]?.name || orders.find(o => o._id === reviewOrderId)?.shopId}` : ''}?
+                  </h3>
+                  <p className="text-gray-500 text-sm font-bold mb-8">Your feedback helps improve our service</p>
+                  
+                  {/* Star Selector */}
+                  <div className="flex justify-center gap-2 mb-8">
+                    {[1,2,3,4,5].map(star => (
+                      <StarIcon
+                        key={star}
+                        filled={star <= (reviewHoverRating || reviewRating)}
+                        size="w-12 h-12"
+                        onClick={() => setReviewRating(star)}
+                        onMouseEnter={() => setReviewHoverRating(star)}
+                        onMouseLeave={() => setReviewHoverRating(0)}
+                      />
+                    ))}
+                  </div>
+                  {reviewRating > 0 && (
+                    <p className="text-yellow-400 font-black text-sm mb-6 animate-pulse">
+                      {reviewRating === 5 ? '🤩 Outstanding!' : reviewRating === 4 ? '😊 Great!' : reviewRating === 3 ? '😐 Okay' : reviewRating === 2 ? '😕 Not great' : '😞 Poor'}
+                    </p>
+                  )}
+
+                  {/* Comment */}
+                  <textarea
+                    value={reviewComment}
+                    onChange={(e) => setReviewComment(e.target.value)}
+                    placeholder="Tell us about your experience (optional)"
+                    rows="3"
+                    className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold text-sm resize-none mb-6"
+                  />
+
+                  {/* Buttons */}
+                  <div className="flex gap-4">
+                    <button
+                      onClick={closeReviewPopup}
+                      className="flex-1 bg-white/5 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition-all"
+                    >
+                      Skip
+                    </button>
+                    <button
+                      onClick={handleSubmitReview}
+                      disabled={reviewRating === 0 || reviewSubmitting}
+                      className="flex-1 bg-gradient-to-r from-yellow-500 to-orange-500 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:from-yellow-400 hover:to-orange-400 transition-all disabled:opacity-30 disabled:cursor-not-allowed shadow-lg shadow-orange-500/20"
+                    >
+                      {reviewSubmitting ? 'Submitting...' : 'Submit Review'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step: Good follow-up (≥ 4 stars) */}
+              {reviewStep === 'followup-good' && (
+                <div className="text-center">
+                  <div className="text-5xl mb-4">🎉</div>
+                  <h3 className="text-2xl font-black tracking-tight mb-2">Glad you liked it!</h3>
+                  <p className="text-gray-400 font-bold text-sm mb-8">Want to add this to your favorites?</p>
+                  <div className="flex gap-4">
+                    <button
+                      onClick={() => setReviewStep('done')}
+                      className="flex-1 bg-white/5 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition-all"
+                    >
+                      Maybe Later
+                    </button>
+                    <button
+                      onClick={() => setReviewStep('done')}
+                      className="flex-1 bg-gradient-to-r from-pink-500 to-red-500 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:from-pink-400 hover:to-red-400 transition-all shadow-lg shadow-red-500/20"
+                    >
+                      ❤️ Add to Favorites
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step: Bad follow-up (≤ 2 stars) */}
+              {reviewStep === 'followup-bad' && (
+                <div className="text-center">
+                  <div className="text-5xl mb-4">😔</div>
+                  <h3 className="text-2xl font-black tracking-tight mb-2">We're sorry</h3>
+                  <p className="text-gray-400 font-bold text-sm mb-6">What went wrong?</p>
+                  <div className="grid grid-cols-2 gap-3 mb-8">
+                    {['Food quality', 'Late delivery', 'Wrong order', 'Packaging issue'].map(issue => (
+                      <button
+                        key={issue}
+                        onClick={() => toggleIssue(issue)}
+                        className={`py-4 px-4 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${
+                          reviewIssues.includes(issue)
+                            ? 'bg-red-500 text-white shadow-lg shadow-red-500/30'
+                            : 'bg-white/5 text-gray-400 hover:bg-white/10'
+                        }`}
+                      >
+                        {issue}
+                      </button>
+                    ))}
+                  </div>
+                  <button
+                    onClick={async () => {
+                      // Update the review with selected issues
+                      if (reviewIssues.length > 0) {
+                        try {
+                          const token = localStorage.getItem('token');
+                          const reviewRes = await fetch(`/api/reviews/order/${reviewOrderId}`, {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                          });
+                          if (reviewRes.ok) {
+                            const existingReview = await reviewRes.json();
+                            if (existingReview) {
+                              await fetch(`/api/reviews/${existingReview._id}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                                body: JSON.stringify({ issues: reviewIssues })
+                              });
+                            }
+                          }
+                        } catch (err) {
+                          console.error('Issue update error:', err);
+                        }
+                      }
+                      setReviewStep('done');
+                    }}
+                    className="w-full bg-gradient-to-r from-yellow-500 to-orange-500 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:from-yellow-400 hover:to-orange-400 transition-all shadow-lg shadow-orange-500/20"
+                  >
+                    Submit Feedback
+                  </button>
+                </div>
+              )}
+
+              {/* Step: Done */}
+              {reviewStep === 'done' && (
+                <div className="text-center">
+                  <div className="text-5xl mb-4">✨</div>
+                  <h3 className="text-2xl font-black tracking-tight mb-2">Thanks for your feedback!</h3>
+                  <p className="text-gray-500 font-bold text-sm mb-8">Your review helps us improve</p>
+                  <button
+                    onClick={closeReviewPopup}
+                    className="w-full bg-orange-500 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-orange-400 transition-all shadow-lg shadow-orange-500/20"
+                  >
+                    Done
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
