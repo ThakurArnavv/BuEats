@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
 
 const shopDetails = {
-  snapeats: { id: 'snapeats', name: 'Snapeats', tagline: 'Snack it, Snap it.', rating: '4.5', time: '10-15 min', img: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?auto=format&fit=crop&w=800&q=80' },
-  houseofchow: { id: 'houseofchow', name: 'House of Chow', tagline: 'Authentic Asian bowls.', rating: '4.8', time: '20 min', img: 'https://images.unsplash.com/photo-1512058564366-18510be2db19?auto=format&fit=crop&w=800&q=80' },
-  kaathi: { id: 'kaathi', name: 'Kaathi', tagline: 'Roll into happiness.', rating: '4.2', time: '15 min', img: 'https://images.unsplash.com/photo-1628840042765-356cda07504e?auto=format&fit=crop&w=800&q=80' },
-  tuckshop: { id: 'tuckshop', name: 'Tuck Shop', tagline: 'Your daily cravings.', rating: '4.0', time: '5-10 min', img: 'https://images.unsplash.com/photo-1550547660-d9450f859349?auto=format&fit=crop&w=800&q=80' }
+  snapeats: { id: 'snapeats', name: 'Snapeats', tagline: 'Snack it, Snap it.', rating: '4.5', time: '10-15 min', img: '/images/snapeats_pizza.png' },
+  houseofchow: { id: 'houseofchow', name: 'House of Chow', tagline: 'Authentic Asian bowls.', rating: '4.8', time: '20 min', img: '/images/houseofchow_bowl.png' },
+  kaathi: { id: 'kaathi', name: 'Kaathi', tagline: 'Roll into happiness.', rating: '4.2', time: '15 min', img: '/images/kaathi_roll.png' },
+  tuckshop: { id: 'tuckshop', name: 'Tuck Shop', tagline: 'Your daily cravings.', rating: '4.0', time: '5-10 min', img: '/images/tuckshop_burger.png' }
 };
 
 // --- ICONS ---
@@ -54,6 +54,12 @@ const ReviewsIcon = () => (
   </svg>
 );
 
+const SupportIcon = () => (
+  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8 4v2m0-6h.01m-2.9-2a4 4 0 016.928 2.05" />
+  </svg>
+);
+
 // --- STATUS BADGE ---
 const StatusBadge = ({ status }) => {
   const colors = {
@@ -72,8 +78,8 @@ const StatusBadge = ({ status }) => {
 };
 
 // --- SIDEBAR COMPONENT ---
-const Sidebar = ({ onSelectDashboard, onSelectShop, onSelectHistory, activeView, activeShopId, onLogout }) => (
-  <aside className="fixed left-0 top-0 h-screen w-64 bg-[#0B1221] border-r border-white/5 flex flex-col z-50">
+const Sidebar = ({ onSelectDashboard, onSelectShop, onSelectHistory, onSelectSupport, activeView, activeShopId, onLogout }) => (
+  <aside className="fixed left-0 top-0 h-screen w-64 bg-[#0F0F0F] border-r border-white/5 flex flex-col z-50">
     <div className="p-8 flex items-center gap-3">
       <FlameIcon />
       <span className="text-xl font-black tracking-tight text-white">BUEATS</span>
@@ -94,6 +100,13 @@ const Sidebar = ({ onSelectDashboard, onSelectShop, onSelectHistory, activeView,
         >
           <HistoryIcon />
           Order History
+        </button>
+        <button 
+          onClick={onSelectSupport}
+          className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all duration-300 ${activeView === 'support' ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/30' : 'text-gray-400 hover:text-white'}`}
+        >
+          <SupportIcon />
+          Support
         </button>
       </div>
 
@@ -156,6 +169,12 @@ export default function App() {
   const [replyText, setReplyText] = useState('');
   const [editingReview, setEditingReview] = useState(null);
   const [userReviews, setUserReviews] = useState({}); // orderId -> review object
+
+  // Support System State
+  const [showComplaintPopup, setShowComplaintPopup] = useState(false);
+  const [complaintContext, setComplaintContext] = useState(null);
+  const [complaintForm, setComplaintForm] = useState({ type: 'Late delivery', description: '' });
+  const [supportComplaints, setSupportComplaints] = useState([]);
 
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
@@ -260,6 +279,19 @@ export default function App() {
       if (existing) return prev.map(i => i._id === item._id ? { ...i, quantity: i.quantity + 1 } : i);
       return [...prev, { ...item, quantity: 1 }];
     });
+  };
+
+  const decrementCart = (itemId) => {
+    setCart(prev => {
+      const existing = prev.find(i => i._id === itemId);
+      if (!existing) return prev;
+      if (existing.quantity <= 1) return prev.filter(i => i._id !== itemId);
+      return prev.map(i => i._id === itemId ? { ...i, quantity: i.quantity - 1 } : i);
+    });
+  };
+
+  const removeFromCart = (itemId) => {
+    setCart(prev => prev.filter(i => i._id !== itemId));
   };
 
   // --- REAL-TIME ORDER POLLING ---
@@ -578,6 +610,58 @@ export default function App() {
     );
   };
 
+  // --- SUPPORT COMPLAINTS SYSTEM ---
+  const fetchComplaints = async () => {
+    try {
+      let url = '';
+      if (user.role === 'student') url = `/api/complaints/user/${user.id}`;
+      else if (user.role === 'shop') url = `/api/complaints/outlet/${user.id}`;
+      else return;
+
+      const res = await fetch(url);
+      if (res.ok) {
+        const data = await res.json();
+        setSupportComplaints(data);
+      }
+    } catch (err) {
+      console.error('Fetch complaints error:', err);
+    }
+  };
+
+  useEffect(() => {
+    if ((user.role === 'student' && view === 'support') || (user.role === 'shop' && shopView === 'support')) {
+      fetchComplaints();
+      const id = setInterval(fetchComplaints, 10000);
+      return () => clearInterval(id);
+    }
+  }, [view, shopView, user.id, user.role]);
+
+  const handleComplaintSubmit = async (e) => {
+    e.preventDefault();
+    if (!complaintContext) return;
+    try {
+      const res = await fetch('/api/complaints', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.id,
+          order_id: complaintContext.orderId,
+          outlet_id: complaintContext.outletId,
+          complaint_type: complaintForm.type,
+          description: complaintForm.description
+        })
+      });
+      if (res.ok) {
+        setShowComplaintPopup(false);
+        setComplaintContext(null);
+        setComplaintForm({ type: 'Late delivery', description: '' });
+        fetchComplaints(); // refresh if we're on the page
+      }
+    } catch (err) {
+      console.error('Submit complaint error:', err);
+    }
+  };
+
   // --- MENU MANAGEMENT WITH API ---
   const handleUpdateMenuItem = async (e) => {
     e.preventDefault();
@@ -645,8 +729,8 @@ export default function App() {
 
   if (view === 'login') {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#090E17] p-4 text-white">
-        <div className="max-w-md w-full bg-[#111727] border border-white/5 rounded-[2.5rem] p-10 shadow-2xl">
+      <div className="min-h-screen flex items-center justify-center bg-[#0A0A0A] p-4 text-white">
+        <div className="max-w-md w-full bg-[#141414] border border-white/5 rounded-[2.5rem] p-10 shadow-2xl">
           <div className="text-center mb-8">
             <div className="flex justify-center mb-4"><FlameIcon /></div>
             <h1 className="text-3xl font-black tracking-tighter">BUEATS</h1>
@@ -675,7 +759,7 @@ export default function App() {
                   type="text" 
                   value={loginForm.username}
                   onChange={(e) => setLoginForm({...loginForm, username: e.target.value})}
-                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
+                  className="w-full px-6 py-4 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
                   placeholder={user.role === 'shop' ? "snapeats" : "2110XXXX"} 
                   required 
                />
@@ -684,7 +768,7 @@ export default function App() {
               type="password" 
               value={loginForm.password}
               onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
-              className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
+              className="w-full px-6 py-4 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
               placeholder="Password" 
               required 
             />
@@ -701,7 +785,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#090E17] text-white flex">
+    <div className="min-h-screen bg-[#0A0A0A] text-white flex">
       {/* Sidebar - Student */}
       {user.role === 'student' && (
         <Sidebar 
@@ -710,13 +794,14 @@ export default function App() {
           onSelectDashboard={() => { setView('student-dash'); setSelectedShopId(null); }}
           onSelectShop={(id) => navigateToShop(id)}
           onSelectHistory={() => { setView('history'); setSelectedShopId(null); }}
+          onSelectSupport={() => { setView('support'); setSelectedShopId(null); }}
           onLogout={handleLogout}
         />
       )}
 
       {/* Sidebar - Shop */}
       {user.role === 'shop' && (
-        <aside className="fixed left-0 top-0 h-screen w-64 bg-[#0B1221] border-r border-white/5 flex flex-col z-50">
+        <aside className="fixed left-0 top-0 h-screen w-64 bg-[#0F0F0F] border-r border-white/5 flex flex-col z-50">
           <div className="p-8 flex items-center gap-3 w-full overflow-hidden">
             <div className="flex-shrink-0"><FlameIcon /></div>
             <span className="text-xl font-black tracking-tight text-white uppercase truncate" title={user.id}>{user.id}</span>
@@ -750,6 +835,13 @@ export default function App() {
               <ReviewsIcon />
               Reviews
             </button>
+            <button 
+              onClick={() => setShopView('support')}
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${shopView === 'support' ? 'bg-orange-500 text-white' : 'text-gray-400'}`}
+            >
+              <SupportIcon />
+              Complaints
+            </button>
           </nav>
           <div className="p-6 border-t border-white/5">
             <button onClick={handleLogout} className="text-xs font-black text-gray-500 hover:text-white uppercase tracking-widest">Sign Out</button>
@@ -759,7 +851,7 @@ export default function App() {
 
       <main className="flex-1 ml-64">
         {/* Header */}
-        <header className="px-10 py-6 flex justify-between items-center sticky top-0 bg-[#090E17]/80 backdrop-blur-xl z-40">
+        <header className="px-10 py-6 flex justify-between items-center sticky top-0 bg-[#0A0A0A]/80 backdrop-blur-xl z-40">
           <div className="flex flex-col">
             <span className="text-[10px] font-black text-gray-500 uppercase tracking-[0.2em]">Bennett University</span>
             <h2 className="text-xl font-black tracking-tight">{getHeaderTitle()}</h2>
@@ -784,7 +876,7 @@ export default function App() {
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-10">
                 {Object.values(shopDetails).map(shop => (
-                  <div key={shop.id} onClick={() => navigateToShop(shop.id)} className="group relative bg-[#111727] rounded-[2.5rem] overflow-hidden cursor-pointer border border-white/5 transition-all hover:scale-[1.01]">
+                  <div key={shop.id} onClick={() => navigateToShop(shop.id)} className="group relative bg-[#141414] rounded-[2.5rem] overflow-hidden cursor-pointer border border-white/5 transition-all hover:scale-[1.01]">
                     <img src={shop.img} className="w-full aspect-video object-cover" />
                     <div className="p-8 absolute bottom-0 w-full bg-gradient-to-t from-black to-transparent">
                       <h3 className="text-3xl font-black">{shop.name}</h3>
@@ -797,40 +889,211 @@ export default function App() {
           )}
 
           {/* Student Menu View */}
-          {user.role === 'student' && view === 'menu' && (
-            <div className="max-w-6xl grid grid-cols-3 gap-10">
-              <div className="col-span-2 space-y-4">
-                <button onClick={() => { setSelectedShopId(null); setView('student-dash'); }} className="text-xs font-black uppercase tracking-widest text-orange-500 mb-4 block">← Back to Outlets</button>
-                {menus[selectedShopId]?.filter(item => item.isAvailable !== false).map(item => (
-                  <div key={item._id} className="bg-[#111727] p-8 rounded-[2rem] border border-white/5 flex justify-between items-center">
-                    <div>
-                      <h4 className="text-2xl font-black">{item.name}</h4>
-                      {item.description && <p className="text-gray-400 text-sm mt-1">{item.description}</p>}
-                      <p className="text-orange-500 font-black mt-1">₹{item.price}</p>
+          {user.role === 'student' && view === 'menu' && (() => {
+            const shop = shopDetails[selectedShopId];
+            const availableItems = menus[selectedShopId]?.filter(item => item.isAvailable !== false) || [];
+            const foodEmojis = ['🍔', '🍕', '🌮', '🍜', '🍛', '🥗', '🍱', '🥘', '🧆', '🍲', '🌯', '🍗', '🥙', '🍝'];
+            return (
+            <div className="max-w-6xl">
+              {/* Hero Banner */}
+              {shop && (
+                <div className="relative rounded-[2rem] overflow-hidden mb-10 group">
+                  <img src={shop.img} className="w-full h-64 object-cover transition-transform duration-700 group-hover:scale-105" alt={shop.name} />
+                  <div className="absolute inset-0 bg-gradient-to-t from-[#0A0A0A] via-[#0A0A0A]/60 to-transparent" />
+                  <div className="absolute inset-0 bg-gradient-to-r from-orange-500/10 to-purple-500/10" />
+                  <div className="absolute bottom-0 left-0 right-0 p-8">
+                    <button onClick={() => { setSelectedShopId(null); setView('student-dash'); }} className="text-xs font-black uppercase tracking-widest text-orange-400 hover:text-orange-300 transition-colors mb-4 inline-flex items-center gap-2">
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 19l-7-7 7-7" /></svg>
+                      Back to Outlets
+                    </button>
+                    <div className="flex items-end justify-between">
+                      <div>
+                        <h2 className="text-4xl font-black tracking-tight mb-1">{shop.name}</h2>
+                        <p className="text-gray-400 font-bold text-sm">{shop.tagline}</p>
+                      </div>
+                      <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10">
+                          <svg className="w-4 h-4 text-yellow-400" fill="currentColor" viewBox="0 0 24 24"><path d="M11.049 2.927c.3-.921 1.603-.921 1.902 0l1.519 4.674a1 1 0 00.95.69h4.915c.969 0 1.371 1.24.588 1.81l-3.976 2.888a1 1 0 00-.363 1.118l1.518 4.674c.3.922-.755 1.688-1.538 1.118l-3.976-2.888a1 1 0 00-1.176 0l-3.976 2.888c-.783.57-1.838-.197-1.538-1.118l1.518-4.674a1 1 0 00-.363-1.118l-3.976-2.888c-.784-.57-.38-1.81.588-1.81h4.914a1 1 0 00.951-.69l1.519-4.674z" /></svg>
+                          <span className="font-black text-sm">{shop.rating}</span>
+                        </div>
+                        <div className="flex items-center gap-1.5 bg-white/10 backdrop-blur-md px-4 py-2 rounded-xl border border-white/10">
+                          <svg className="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                          <span className="font-black text-sm">{shop.time}</span>
+                        </div>
+                      </div>
                     </div>
-                    <button onClick={() => addToCart(item)} className="w-12 h-12 bg-orange-500 rounded-xl font-black text-2xl flex-shrink-0">+</button>
                   </div>
-                ))}
-                {menus[selectedShopId]?.filter(item => item.isAvailable !== false).length === 0 && (
-                  <div className="py-20 text-center opacity-30">
-                    <p className="text-xl font-black uppercase tracking-widest">No items available</p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-8">
+                {/* Menu Items */}
+                <div className="col-span-2">
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-lg font-black uppercase tracking-widest text-gray-500">
+                      Menu <span className="text-orange-500 ml-2">{availableItems.length} items</span>
+                    </h3>
                   </div>
-                )}
-              </div>
-              <div className="col-span-1 bg-[#111727] p-8 rounded-[2rem] h-fit sticky top-32">
-                <h3 className="text-xl font-black mb-6">Your Tray</h3>
-                {cart.length === 0 ? <p className="opacity-30 text-center py-10">Tray Empty</p> : (
-                  <div className="space-y-4">
-                    {cart.map(item => <div key={item._id} className="flex justify-between font-bold"><span>{item.quantity}x {item.name}</span><span>₹{item.price * item.quantity}</span></div>)}
-                    <div className="pt-4 border-t border-white/5">
-                      <div className="flex justify-between text-2xl font-black mb-6"><span>Total</span><span>₹{cartTotal}</span></div>
-                      <button onClick={handlePlaceOrder} className="w-full bg-orange-500 py-4 rounded-xl font-black uppercase text-xs">Checkout</button>
+
+                  {availableItems.length === 0 ? (
+                    <div className="py-32 text-center">
+                      <div className="text-6xl mb-6 animate-float">🍽️</div>
+                      <p className="text-xl font-black uppercase tracking-widest text-gray-600">No items available</p>
+                      <p className="text-gray-600 text-sm mt-2">Check back later for new dishes!</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {availableItems.map((item, idx) => {
+                        const cartItem = cart.find(c => c._id === item._id);
+                        const emoji = foodEmojis[idx % foodEmojis.length];
+                        return (
+                          <div
+                            key={item._id}
+                            className="animate-fadeSlideUp group relative bg-[#141414] rounded-[1.5rem] border border-white/5 overflow-hidden transition-all duration-300 hover:border-orange-500/20 hover:shadow-lg hover:shadow-orange-500/5"
+                            style={{ animationDelay: `${idx * 80}ms` }}
+                          >
+                            <div className="flex items-center gap-6 p-6">
+                              {/* Food Emoji Badge */}
+                              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-orange-500/20 to-amber-500/10 flex items-center justify-center text-3xl flex-shrink-0 group-hover:scale-110 transition-transform duration-300">
+                                {emoji}
+                              </div>
+
+                              {/* Item Details */}
+                              <div className="flex-1 min-w-0">
+                                <h4 className="text-xl font-black leading-tight group-hover:text-orange-400 transition-colors duration-300">{item.name}</h4>
+                                {item.description && (
+                                  <p className="text-gray-500 text-sm mt-1 line-clamp-1">{item.description}</p>
+                                )}
+                                <div className="mt-2 flex items-center gap-3">
+                                  <span className="text-lg font-black bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">
+                                    ₹{item.price}
+                                  </span>
+                                </div>
+                              </div>
+
+                              {/* Add-to-Cart / Quantity Controls */}
+                              <div className="flex-shrink-0">
+                                {cartItem ? (
+                                  <div className="flex items-center gap-2 animate-cartPop">
+                                    <button
+                                      onClick={() => decrementCart(item._id)}
+                                      className="w-10 h-10 rounded-xl bg-white/5 hover:bg-white/10 transition-all flex items-center justify-center font-black text-lg text-gray-300 hover:text-white"
+                                    >
+                                      −
+                                    </button>
+                                    <span className="w-8 text-center font-black text-lg">{cartItem.quantity}</span>
+                                    <button
+                                      onClick={() => addToCart(item)}
+                                      className="w-10 h-10 rounded-xl bg-orange-500 hover:bg-orange-400 transition-all flex items-center justify-center font-black text-lg shadow-lg shadow-orange-500/25"
+                                    >
+                                      +
+                                    </button>
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => addToCart(item)}
+                                    className="w-12 h-12 rounded-2xl bg-gradient-to-br from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 transition-all flex items-center justify-center font-black text-2xl shadow-lg shadow-orange-500/25 hover:shadow-orange-500/40 hover:scale-105 active:scale-95 animate-pulseGlow"
+                                  >
+                                    +
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            {/* Bottom accent line that fills on hover */}
+                            <div className="h-[2px] bg-gradient-to-r from-transparent via-orange-500/0 to-transparent group-hover:via-orange-500/50 transition-all duration-500" />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Cart Sidebar */}
+                <div className="col-span-1">
+                  <div className="sticky top-28 bg-[#141414]/80 backdrop-blur-xl rounded-[2rem] border border-white/10 overflow-hidden shadow-2xl shadow-black/30">
+                    {/* Cart Header */}
+                    <div className="p-6 pb-4 border-b border-white/5">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-orange-500/10 rounded-xl flex items-center justify-center">
+                            <svg className="w-5 h-5 text-orange-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" /></svg>
+                          </div>
+                          <h3 className="text-lg font-black">Your Tray</h3>
+                        </div>
+                        {cart.length > 0 && (
+                          <span className="bg-orange-500 text-white text-[10px] font-black w-6 h-6 rounded-full flex items-center justify-center">
+                            {cart.reduce((s, i) => s + i.quantity, 0)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Cart Body */}
+                    <div className="p-6">
+                      {cart.length === 0 ? (
+                        <div className="text-center py-12">
+                          <div className="text-4xl mb-4 animate-float">🛒</div>
+                          <p className="text-gray-600 font-bold text-sm">Your tray is empty</p>
+                          <p className="text-gray-700 text-xs mt-1">Add items to get started</p>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="space-y-3 max-h-[40vh] overflow-y-auto cart-scroll pr-1">
+                            {cart.map(item => (
+                              <div key={item._id} className="group/item flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-all animate-cartPop">
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-bold text-sm truncate">{item.name}</p>
+                                  <p className="text-orange-500 font-black text-xs">₹{item.price * item.quantity}</p>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <button
+                                    onClick={() => decrementCart(item._id)}
+                                    className="w-7 h-7 rounded-lg bg-white/5 hover:bg-red-500/20 hover:text-red-400 transition-all flex items-center justify-center text-xs font-black text-gray-400"
+                                  >
+                                    −
+                                  </button>
+                                  <span className="w-6 text-center font-black text-sm">{item.quantity}</span>
+                                  <button
+                                    onClick={() => addToCart(item)}
+                                    className="w-7 h-7 rounded-lg bg-white/5 hover:bg-orange-500/20 hover:text-orange-400 transition-all flex items-center justify-center text-xs font-black text-gray-400"
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                                <button
+                                  onClick={() => removeFromCart(item._id)}
+                                  className="w-7 h-7 rounded-lg opacity-0 group-hover/item:opacity-100 bg-red-500/10 hover:bg-red-500/20 text-red-500 transition-all flex items-center justify-center"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+
+                          <div className="mt-4 pt-4 border-t border-white/5">
+                            <div className="flex justify-between items-center mb-4">
+                              <span className="text-gray-400 font-bold text-sm">Total</span>
+                              <span className="text-2xl font-black bg-gradient-to-r from-orange-400 to-amber-500 bg-clip-text text-transparent">
+                                ₹{cartTotal}
+                              </span>
+                            </div>
+                            <button
+                              onClick={handlePlaceOrder}
+                              className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 py-4 rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg shadow-orange-500/25 hover:shadow-orange-500/40 hover:scale-[1.02] active:scale-[0.98]"
+                            >
+                              🚀 Place Order
+                            </button>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
-                )}
+                </div>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* ===== STUDENT ORDER HISTORY ===== */}
           {user.role === 'student' && view === 'history' && (
@@ -842,7 +1105,7 @@ export default function App() {
                 </div>
               ) : (
                 orders.map(order => (
-                  <div key={order._id} className="bg-[#111727] p-8 rounded-[2rem] border border-white/5">
+                  <div key={order._id} className="bg-[#141414] p-8 rounded-[2rem] border border-white/5">
                     <div className="flex justify-between items-start mb-4">
                       <div>
                         <span className="text-[10px] font-black text-orange-500 uppercase tracking-widest block">
@@ -875,6 +1138,17 @@ export default function App() {
                             </button>
                           )
                         }
+                        {order.status === 'completed' && (
+                          <button 
+                            onClick={() => {
+                              setComplaintContext({ orderId: order._id, outletId: order.shopId });
+                              setShowComplaintPopup(true);
+                            }}
+                            className="text-[10px] font-black text-red-500 uppercase tracking-widest hover:text-red-400 transition-colors"
+                          >
+                            Support / Complaint
+                          </button>
+                        )}
                         {order.expectedPreparationTime && (
                           <span className="text-xs text-gray-400 font-bold">
                             ⏱ Est. {order.expectedPreparationTime} min
@@ -895,7 +1169,7 @@ export default function App() {
                 <div className="py-32 text-center opacity-20"><p className="text-xl font-black uppercase tracking-widest">No active orders</p></div>
               ) : (
                 orders.filter(o => !['completed', 'cancelled'].includes(o.status)).map(order => (
-                  <div key={order._id} className={`bg-[#111727] p-8 rounded-[2rem] border border-white/5 ${['completed', 'cancelled'].includes(order.status) ? 'opacity-40' : ''}`}>
+                  <div key={order._id} className={`bg-[#141414] p-8 rounded-[2rem] border border-white/5 ${['completed', 'cancelled'].includes(order.status) ? 'opacity-40' : ''}`}>
                     <div className="flex justify-between items-start mb-4">
                       <div>
                         <span className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-1 block">
@@ -941,7 +1215,7 @@ export default function App() {
                               type="number" min="1" max="120" placeholder="Min"
                               value={prepTime}
                               onChange={(e) => setPrepTime(e.target.value)}
-                              className="w-20 px-3 py-3 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-green-500 transition-all font-bold text-sm text-center"
+                              className="w-20 px-3 py-3 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-green-500 transition-all font-bold text-sm text-center"
                               autoFocus
                             />
                             <button 
@@ -992,7 +1266,7 @@ export default function App() {
                 </div>
               ) : (
                 orders.filter(o => ['completed', 'cancelled'].includes(o.status)).map(order => (
-                  <div key={order._id} className="bg-[#111727] p-8 rounded-[2rem] border border-white/5">
+                  <div key={order._id} className="bg-[#141414] p-8 rounded-[2rem] border border-white/5">
                     <div className="flex justify-between items-start mb-4">
                       <div>
                         <span className="text-[10px] font-black text-orange-500 uppercase tracking-widest block">
@@ -1038,7 +1312,7 @@ export default function App() {
               </div>
               <div className="grid grid-cols-1 gap-4">
                 {(menus[user.id] || []).map(item => (
-                  <div key={item._id} className={`bg-[#111727] p-6 rounded-[1.5rem] border border-white/5 flex justify-between items-center group ${item.isAvailable === false ? 'opacity-50' : ''}`}>
+                  <div key={item._id} className={`bg-[#141414] p-6 rounded-[1.5rem] border border-white/5 flex justify-between items-center group ${item.isAvailable === false ? 'opacity-50' : ''}`}>
                     <div className="flex-1 min-w-0 mr-4">
                       <div className="flex items-center gap-3">
                         <p className="font-black text-lg">{item.name}</p>
@@ -1072,7 +1346,7 @@ export default function App() {
               ) : (
                 <>
                   {/* Stats Summary */}
-                  <div className="bg-[#111727] p-8 rounded-[2rem] border border-white/5 mb-2">
+                  <div className="bg-[#141414] p-8 rounded-[2rem] border border-white/5 mb-2">
                     <div className="flex items-center gap-8">
                       <div className="text-center">
                         <p className="text-5xl font-black text-yellow-400">
@@ -1108,7 +1382,7 @@ export default function App() {
 
                   {/* Individual Reviews */}
                   {shopReviews.map(review => (
-                    <div key={review._id} className="bg-[#111727] p-8 rounded-[2rem] border border-white/5">
+                    <div key={review._id} className="bg-[#141414] p-8 rounded-[2rem] border border-white/5">
                       <div className="flex justify-between items-start mb-3">
                         <div>
                           <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block">{review.studentId}</span>
@@ -1146,7 +1420,7 @@ export default function App() {
                                 onChange={(e) => setReplyText(e.target.value)}
                                 placeholder="Write your reply..."
                                 rows="2"
-                                className="w-full px-4 py-3 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold text-sm resize-none"
+                                className="w-full px-4 py-3 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold text-sm resize-none"
                                 autoFocus
                               />
                               <div className="flex gap-3">
@@ -1170,13 +1444,79 @@ export default function App() {
               )}
             </div>
           )}
+
+          {/* ===== COMPLAINTS & SUPPORT VIEW (Student & Shop) ===== */}
+          {((user.role === 'student' && view === 'support') || (user.role === 'shop' && shopView === 'support')) && (
+            <div className="max-w-4xl space-y-6">
+              <div className="mb-8">
+                <h2 className="text-3xl font-black tracking-tighter">Support & Complaints</h2>
+                <p className="text-gray-500 font-bold mt-1 text-sm">
+                  {user.role === 'student' ? 'Track your active complaints and view resolutions.' : 'Manage customer issues and provide support.'}
+                </p>
+              </div>
+
+              {supportComplaints.length === 0 ? (
+                <div className="py-32 text-center opacity-20">
+                  <div className="text-6xl mb-4 animate-float">🛡️</div>
+                  <p className="text-xl font-black uppercase tracking-widest">No complaints</p>
+                  <p className="text-sm text-gray-500 mt-2">Everything is running smoothly.</p>
+                </div>
+              ) : (
+                supportComplaints.map(complaint => (
+                  <div key={complaint._id} className="bg-[#141414] p-8 rounded-[2rem] border border-white/5 relative overflow-hidden group">
+                    <div className="absolute top-0 right-0 w-32 h-32 bg-orange-500/5 rounded-full blur-2xl transform translate-x-10 -translate-y-10 group-hover:bg-orange-500/10 transition-all"></div>
+                    <div className="flex justify-between items-start mb-4 relative z-10">
+                      <div>
+                        <span className="text-[10px] font-black text-red-500 uppercase tracking-widest block mb-1">
+                          Issue type: {complaint.complaint_type}
+                        </span>
+                        <span className="text-gray-500 text-xs font-bold block mb-1">
+                          Order: {typeof complaint.order_id === 'object' ? complaint.order_id?._id?.substring(complaint.order_id._id.length - 4) : complaint.order_id?.substring ? complaint.order_id.substring(complaint.order_id.length - 4) : complaint.order_id}
+                        </span>
+                        <span className="text-gray-500 text-[10px] font-bold">
+                          {new Date(complaint.createdAt).toLocaleDateString('en-IN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                          {user.role === 'shop' && ` · By ${complaint.user_id}`}
+                        </span>
+                      </div>
+                      <StatusBadge status={complaint.status.toLowerCase()} />
+                    </div>
+
+                    <div className="bg-[#0A0A0A] p-4 rounded-2xl border border-white/5 mb-4 relative z-10">
+                      <p className="text-gray-300 text-sm font-bold leading-relaxed">
+                        "{complaint.description}"
+                      </p>
+                    </div>
+
+                    {user.role === 'shop' && complaint.status === 'Pending' && (
+                      <div className="flex gap-3 relative z-10">
+                         <button 
+                           onClick={async () => {
+                             const token = localStorage.getItem('token');
+                             await fetch(`/api/complaints/${complaint._id}/status`, {
+                               method: 'PUT',
+                               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+                               body: JSON.stringify({ status: 'Resolved' })
+                             });
+                             fetchComplaints();
+                           }}
+                           className="bg-green-500/10 text-green-500 px-6 py-3 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-green-500 hover:text-white transition-all border border-green-500/20"
+                         >
+                           Mark Resolved
+                         </button>
+                      </div>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          )}
         </div>
       </main>
 
       {/* ===== ITEM EDIT MODAL (with description + availability toggle) ===== */}
       {editingItem && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[100] flex items-center justify-center p-6">
-          <form onSubmit={handleUpdateMenuItem} className="bg-[#111727] p-10 rounded-[2.5rem] border border-white/5 w-full max-w-sm space-y-6">
+          <form onSubmit={handleUpdateMenuItem} className="bg-[#141414] p-10 rounded-[2.5rem] border border-white/5 w-full max-w-sm space-y-6">
             <h3 className="text-2xl font-black tracking-tight">{editingItem.isNew ? 'New Item' : 'Edit Item'}</h3>
             <div className="space-y-4">
               <div>
@@ -1185,7 +1525,7 @@ export default function App() {
                   autoFocus required type="text" 
                   value={editingItem.name}
                   onChange={(e) => setEditingItem({...editingItem, name: e.target.value})}
-                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
+                  className="w-full px-6 py-4 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
                 />
               </div>
               <div>
@@ -1194,7 +1534,7 @@ export default function App() {
                   value={editingItem.description || ''}
                   onChange={(e) => setEditingItem({...editingItem, description: e.target.value})}
                   rows="2"
-                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold resize-none" 
+                  className="w-full px-6 py-4 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold resize-none" 
                   placeholder="Optional description..."
                 />
               </div>
@@ -1204,7 +1544,7 @@ export default function App() {
                   required type="number" 
                   value={editingItem.price}
                   onChange={(e) => setEditingItem({...editingItem, price: e.target.value})}
-                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
+                  className="w-full px-6 py-4 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
                 />
               </div>
               <div className="flex items-center justify-between px-1">
@@ -1228,7 +1568,7 @@ export default function App() {
 
       {/* Order Progress Overlays (Students Only) */}
       {activeOrder && ['pending', 'placed', 'accepted', 'preparing'].includes(activeOrder.status) && (
-        <div className="fixed bottom-6 right-6 bg-[#111727] p-8 rounded-[2.5rem] border border-white/10 w-80 shadow-2xl shadow-black/50 z-[100] transform transition-all hover:scale-105">
+        <div className="fixed bottom-6 right-6 bg-[#141414] p-8 rounded-[2.5rem] border border-white/10 w-80 shadow-2xl shadow-black/50 z-[100] transform transition-all hover:scale-105">
           <div className="relative w-16 h-16 mx-auto mb-6">
             <div className="absolute inset-0 bg-orange-500/20 rounded-full animate-ping"></div>
             <div className="relative w-full h-full bg-orange-500/40 rounded-full flex items-center justify-center text-2xl">👨‍🍳</div>
@@ -1254,7 +1594,7 @@ export default function App() {
 
       {/* Order Cancelled Overlay */}
       {activeOrder && activeOrder.status === 'cancelled' && (
-        <div className="fixed bottom-6 right-6 bg-[#111727] p-8 rounded-[2.5rem] border border-red-500/20 w-80 shadow-2xl shadow-black/50 z-[100]">
+        <div className="fixed bottom-6 right-6 bg-[#141414] p-8 rounded-[2.5rem] border border-red-500/20 w-80 shadow-2xl shadow-black/50 z-[100]">
           <div className="text-center">
             <div className="text-5xl mb-4">❌</div>
             <h2 className="text-xl font-black tracking-tight mb-1">Order Cancelled</h2>
@@ -1284,7 +1624,7 @@ export default function App() {
       {/* ===== REVIEW POPUP MODAL ===== */}
       {showReviewPopup && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[200] flex items-center justify-center p-6">
-          <div className="bg-[#111727] rounded-[2.5rem] border border-white/5 w-full max-w-md shadow-2xl shadow-black/50 overflow-hidden">
+          <div className="bg-[#141414] rounded-[2.5rem] border border-white/5 w-full max-w-md shadow-2xl shadow-black/50 overflow-hidden">
             {/* Header gradient bar */}
             <div className="h-1.5 bg-gradient-to-r from-yellow-400 via-orange-500 to-red-500" />
             
@@ -1323,7 +1663,7 @@ export default function App() {
                     onChange={(e) => setReviewComment(e.target.value)}
                     placeholder="Tell us about your experience (optional)"
                     rows="3"
-                    className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold text-sm resize-none mb-6"
+                    className="w-full px-6 py-4 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold text-sm resize-none mb-6"
                   />
 
                   {/* Buttons */}
@@ -1436,6 +1776,71 @@ export default function App() {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== COMPLAINT SUBMISSION MODAL ===== */}
+      {showComplaintPopup && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md z-[200] flex items-center justify-center p-6">
+          <div className="bg-[#141414] rounded-[2.5rem] border border-white/5 w-full max-w-md shadow-2xl shadow-black/50 overflow-hidden relative">
+            <div className="h-1.5 bg-gradient-to-r from-red-500 via-orange-500 to-amber-500" />
+            <form onSubmit={handleComplaintSubmit} className="p-10 space-y-6">
+              <div className="text-center mb-6">
+                <div className="text-5xl mb-4 animate-float">🚩</div>
+                <h3 className="text-2xl font-black tracking-tight mb-2">Raise Support Ticket</h3>
+                <p className="text-gray-500 text-sm font-bold">We're here to help resolve your issue.</p>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2 block">Issue Category</label>
+                <div className="relative">
+                  <select 
+                    value={complaintForm.type}
+                    onChange={(e) => setComplaintForm({...complaintForm, type: e.target.value})}
+                    className="w-full px-6 py-4 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-red-500 transition-all font-bold text-sm appearance-none cursor-pointer"
+                  >
+                    <option value="Late delivery">Late delivery</option>
+                    <option value="Wrong order">Wrong order</option>
+                    <option value="Poor food quality">Poor food quality</option>
+                    <option value="Payment issue">Payment issue</option>
+                    <option value="App/technical issue">App/technical issue</option>
+                    <option value="Other">Other</option>
+                  </select>
+                  <div className="absolute inset-y-0 right-4 flex items-center pointer-events-none">
+                     <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1 mb-2 block">Detailed Description</label>
+                <textarea 
+                  required
+                  value={complaintForm.description}
+                  onChange={(e) => setComplaintForm({...complaintForm, description: e.target.value})}
+                  rows="3"
+                  className="w-full px-6 py-4 bg-[#0A0A0A] border border-white/10 rounded-xl outline-none focus:border-red-500 transition-all font-bold text-sm resize-none" 
+                  placeholder="Please describe exactly what went wrong..."
+                />
+              </div>
+
+              <div className="flex gap-4 pt-4">
+                <button 
+                  type="button" 
+                  onClick={() => setShowComplaintPopup(false)} 
+                  className="flex-1 bg-white/5 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="flex-1 bg-gradient-to-r from-red-600 to-orange-500 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest shadow-lg shadow-red-500/20 hover:from-red-500 hover:to-orange-400 transition-all"
+                >
+                  Submit Ticket
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

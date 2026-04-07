@@ -6,6 +6,7 @@ import authRoutes from './routes/auth.js';
 import orderRoutes from './routes/orders.js';
 import menuRoutes from './routes/menu.js';
 import reviewRoutes from './routes/reviews.js';
+import complaintRoutes from './routes/complaints.js';
 
 dotenv.config();
 
@@ -27,6 +28,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api/complaints', complaintRoutes);
 
 // Database Connection
 mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/foodcampus')
