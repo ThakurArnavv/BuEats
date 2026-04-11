@@ -2,8 +2,6 @@ import express from 'express';
 import mongoose from 'mongoose';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import authRoutes from './routes/auth.js';
 import orderRoutes from './routes/orders.js';
 import menuRoutes from './routes/menu.js';
@@ -14,14 +12,15 @@ import complaintRoutes from './routes/complaints.js';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 app.use(express.json());
 
 // Request logging middleware
@@ -39,36 +38,34 @@ app.use('/api/payment', paymentRoutes);
 app.use('/api/chatbot', chatbotRoutes);
 app.use('/api/complaints', complaintRoutes);
 
-// Serve frontend static files in production
-app.use(express.static(path.join(__dirname, 'public')));
-
-// SPA fallback — serve index.html for all non-API routes
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+// Health check
+app.get('/api', (req, res) => {
+  res.json({ status: 'BuEats API is running' });
 });
 
+// MongoDB connection with caching for serverless (Vercel cold starts)
+let isConnected = false;
 
-// Handle database connection separately
 const connectDB = async () => {
+  if (isConnected) return;
   try {
-    await mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/foodcampus');
+    await mongoose.connect(process.env.MONGO_URI);
+    isConnected = true;
     console.log('Connected to MongoDB');
   } catch (error) {
     console.error('Error connecting to MongoDB:', error);
+    throw error;
   }
 };
 
-// Start server if running directly
-if (process.env.NODE_ENV !== 'test' && !process.env.VERCEL) {
-  connectDB().then(() => {
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
+// Connect immediately
+connectDB();
+
+// Start local server only when NOT on Vercel
+if (!process.env.VERCEL) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
   });
-} else {
-  // On Vercel, connect to DB on every (or first) function invocation
-  connectDB();
 }
 
 export default app;
-
