@@ -11,6 +11,7 @@
       "config": { "distDir": "dist" }
     }
   ],
+  "cleanUrls": true,
   "rewrites": [
     {
       "source": "/api/(.*)",
@@ -18,12 +19,7 @@
     },
     {
       "source": "/(.*)",
-      "destination": "/foodcampus/$1",
-      "check": true
-    },
-    {
-      "source": "/(.*)",
-      "destination": "/foodcampus/index.html"
+      "destination": "/index.html"
     }
   ]
 }
