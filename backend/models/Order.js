@@ -28,6 +28,20 @@ const orderSchema = new mongoose.Schema({
     enum: ['pending', 'placed', 'accepted', 'preparing', 'ready', 'completed', 'cancelled'],
     default: 'pending'
   },
+  paymentStatus: {
+    type: String,
+    enum: ['pending', 'completed', 'failed'],
+    default: 'pending'
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['upi', 'cash'],
+    default: 'upi'
+  },
+  transactionId: {
+    type: String,
+    default: ''
+  },
   expectedPreparationTime: {
     type: Number,
     min: 0

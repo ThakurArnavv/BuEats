@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Chatbot from './Chatbot.jsx';
 
 const shopDetails = {
   snapeats: { id: 'snapeats', name: 'Snapeats', tagline: 'Snack it, Snap it.', rating: '4.5', time: '10-15 min', img: 'https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?auto=format&fit=crop&w=800&q=80' },
@@ -81,14 +82,14 @@ const Sidebar = ({ onSelectDashboard, onSelectShop, onSelectHistory, activeView,
 
     <nav className="flex-1 px-4 py-4 space-y-8">
       <div className="space-y-2">
-        <button 
+        <button
           onClick={onSelectDashboard}
           className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all duration-300 ${activeView === 'student-dash' ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/30' : 'text-gray-400 hover:text-white'}`}
         >
           <HomeIcon />
           Dashboard
         </button>
-        <button 
+        <button
           onClick={onSelectHistory}
           className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all duration-300 ${activeView === 'history' ? 'bg-orange-500 text-white shadow-lg shadow-orange-500/30' : 'text-gray-400 hover:text-white'}`}
         >
@@ -130,13 +131,22 @@ export default function App() {
   const [cart, setCart] = useState([]);
   const [currentOrderProgressId, setCurrentOrderProgressId] = useState(null);
   const [loginForm, setLoginForm] = useState({ username: '', password: '' });
-  
+
+  // UPI Payment State
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [paymentStep, setPaymentStep] = useState('select'); // 'select' | 'processing' | 'success' | 'failed'
+  const [selectedUpiApp, setSelectedUpiApp] = useState(null);
+  const [paymentTimer, setPaymentTimer] = useState(0);
+  const [transactionId, setTransactionId] = useState('');
+  const [paymentOrderId, setPaymentOrderId] = useState(null);
+  const [paidAmount, setPaidAmount] = useState(0);
+
   // Auth state
   const [isLoginMode, setIsLoginMode] = useState(true);
   const [authError, setAuthError] = useState('');
 
   // Shop Owner State
-  const [shopView, setShopView] = useState('orders'); 
+  const [shopView, setShopView] = useState('orders');
   const [editingItem, setEditingItem] = useState(null);
   const [acceptingOrderId, setAcceptingOrderId] = useState(null);
   const [prepTime, setPrepTime] = useState('');
@@ -160,9 +170,9 @@ export default function App() {
   const handleAuthSubmit = async (e) => {
     e.preventDefault();
     setAuthError('');
-    
+
     const endpoint = isLoginMode ? '/api/auth/login' : '/api/auth/register';
-    
+
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
@@ -173,13 +183,13 @@ export default function App() {
           role: user.role
         })
       });
-      
+
       const data = await response.json();
-      
+
       if (!response.ok) {
         throw new Error(data.error || 'Authentication failed');
       }
-      
+
       if (isLoginMode) {
         localStorage.setItem('token', data.token);
         const userData = {
@@ -275,21 +285,21 @@ export default function App() {
           const res = await fetch(endpoint, {
             headers: { 'Authorization': `Bearer ${token}` }
           });
-          
+
           if (res.ok) {
             const data = await res.json();
             setOrders(data);
-            
+
             // Auto-sync current student active order progress
             if (user.role === 'student' && data.length > 0) {
               const latestOrder = data[0];
               if (['pending', 'placed', 'accepted', 'preparing', 'ready'].includes(latestOrder.status)) {
-                 setCurrentOrderProgressId(latestOrder._id);
+                setCurrentOrderProgressId(latestOrder._id);
               }
 
               // Fetch all reviews for this student in one go
               const rRes = await fetch('/api/reviews/student', {
-                 headers: { 'Authorization': `Bearer ${token}` }
+                headers: { 'Authorization': `Bearer ${token}` }
               });
               if (rRes.ok) {
                 const rData = await rRes.json();
@@ -310,14 +320,24 @@ export default function App() {
     return () => clearInterval(intervalId);
   }, [view, user.id, user.role]);
 
+  // Open payment modal instead of placing order directly
+  const handleCheckout = () => {
+    if (cart.length === 0) return;
+    setShowPaymentModal(true);
+    setPaymentStep('select');
+    setSelectedUpiApp(null);
+    setTransactionId('');
+    setPaymentOrderId(null);
+  };
+
   const handlePlaceOrder = async () => {
     try {
       const token = localStorage.getItem('token');
       const res = await fetch('/api/orders', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({
           shopId: selectedShopId,
@@ -328,13 +348,135 @@ export default function App() {
 
       if (res.ok) {
         const newOrder = await res.json();
-        setCart([]);
-        setCurrentOrderProgressId(newOrder._id);
-        setOrders(prev => [newOrder, ...prev]); 
+        setPaymentOrderId(newOrder._id);
+        return newOrder;
       }
     } catch (err) {
       console.error("Failed to place order", err);
     }
+    return null;
+  };
+
+  // Process UPI payment
+  const handleUpiPayment = async () => {
+    setPaymentStep('processing');
+    setPaymentTimer(30);
+
+    // First place the order
+    const newOrder = await handlePlaceOrder();
+    if (!newOrder) {
+      setPaymentStep('failed');
+      return;
+    }
+
+    // Initiate payment
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/payment/initiate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({ orderId: newOrder._id })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setTransactionId(data.transactionId);
+
+        // Simulate payment processing (in production, poll gateway status)
+        setTimeout(async () => {
+          try {
+            const verifyRes = await fetch('/api/payment/verify', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+              },
+              body: JSON.stringify({
+                orderId: newOrder._id,
+                transactionId: data.transactionId,
+                paymentMethod: 'upi'
+              })
+            });
+
+            if (verifyRes.ok) {
+              setPaidAmount(cartTotal);
+              setPaymentStep('success');
+              setCart([]);
+              setCurrentOrderProgressId(newOrder._id);
+              setOrders(prev => [newOrder, ...prev]);
+            } else {
+              setPaymentStep('failed');
+            }
+          } catch {
+            setPaymentStep('failed');
+          }
+        }, 3000);
+      } else {
+        setPaymentStep('failed');
+      }
+    } catch {
+      setPaymentStep('failed');
+    }
+  };
+
+  // Process Counter (pay at shop) payment
+  const handleCounterPayment = async () => {
+    setPaymentStep('processing');
+    setPaymentTimer(5);
+
+    const newOrder = await handlePlaceOrder();
+    if (!newOrder) {
+      setPaymentStep('failed');
+      return;
+    }
+
+    // Mark payment as cash/counter
+    try {
+      const token = localStorage.getItem('token');
+      const res = await fetch('/api/payment/verify', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          orderId: newOrder._id,
+          transactionId: 'COUNTER-' + Date.now().toString(36).toUpperCase(),
+          paymentMethod: 'cash'
+        })
+      });
+
+      if (res.ok) {
+        setPaidAmount(cartTotal);
+        setTransactionId('');
+        setPaymentStep('success');
+        setCart([]);
+        setCurrentOrderProgressId(newOrder._id);
+        setOrders(prev => [newOrder, ...prev]);
+      } else {
+        setPaymentStep('failed');
+      }
+    } catch {
+      setPaymentStep('failed');
+    }
+  };
+
+  // Payment timer countdown
+  useEffect(() => {
+    let interval;
+    if (paymentStep === 'processing' && paymentTimer > 0) {
+      interval = setInterval(() => setPaymentTimer(t => t - 1), 1000);
+    }
+    return () => clearInterval(interval);
+  }, [paymentStep, paymentTimer]);
+
+  const closePaymentModal = () => {
+    setShowPaymentModal(false);
+    setPaymentStep('select');
+    setSelectedUpiApp(null);
   };
 
   const updateOrderStatus = async (orderId, newStatus) => {
@@ -342,15 +484,15 @@ export default function App() {
       const token = localStorage.getItem('token');
       const res = await fetch(`/api/orders/${orderId}/status`, {
         method: 'PUT',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ status: newStatus })
       });
-      
+
       if (res.ok) {
-        setOrders(orders.map(o => o._id === orderId ? {...o, status: newStatus} : o));
+        setOrders(orders.map(o => o._id === orderId ? { ...o, status: newStatus } : o));
       }
     } catch (err) {
       console.error("Failed to update status", err);
@@ -363,13 +505,13 @@ export default function App() {
       const token = localStorage.getItem('token');
       const res = await fetch(`/api/orders/${orderId}/accept`, {
         method: 'PUT',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}` 
+          'Authorization': `Bearer ${token}`
         },
         body: JSON.stringify({ expectedPreparationTime: parseInt(prepTime) })
       });
-      
+
       if (res.ok) {
         const updated = await res.json();
         setOrders(orders.map(o => o._id === orderId ? updated : o));
@@ -389,9 +531,9 @@ export default function App() {
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
+
       if (res.ok) {
-        setOrders(orders.map(o => o._id === orderId ? {...o, status: 'cancelled'} : o));
+        setOrders(orders.map(o => o._id === orderId ? { ...o, status: 'cancelled' } : o));
       }
     } catch (err) {
       console.error("Failed to reject order", err);
@@ -652,16 +794,16 @@ export default function App() {
             <h1 className="text-3xl font-black tracking-tighter">BUEATS</h1>
           </div>
           <div className="flex bg-[#1A2235] p-1 rounded-2xl mb-8">
-            <button 
+            <button
               type="button"
-              onClick={() => setUser({ ...user, role: 'student' })} 
+              onClick={() => setUser({ ...user, role: 'student' })}
               className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${user.role === 'student' ? 'bg-orange-500 text-white shadow-lg' : 'text-gray-500'}`}
             >
               Student
             </button>
-            <button 
+            <button
               type="button"
-              onClick={() => setUser({ ...user, role: 'shop' })} 
+              onClick={() => setUser({ ...user, role: 'shop' })}
               className={`flex-1 py-3 rounded-xl font-bold text-sm transition-all ${user.role === 'shop' ? 'bg-orange-500 text-white shadow-lg' : 'text-gray-500'}`}
             >
               Shop Owner
@@ -670,23 +812,23 @@ export default function App() {
           <form onSubmit={handleAuthSubmit} className="space-y-6">
             {authError && <div className={`p-3 rounded-xl text-sm font-bold text-center ${authError.includes('successful') ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'}`}>{authError}</div>}
             <div className="space-y-2">
-               <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">{user.role === 'shop' ? 'Shop ID (e.g. snapeats)' : 'Student ID'}</label>
-               <input 
-                  type="text" 
-                  value={loginForm.username}
-                  onChange={(e) => setLoginForm({...loginForm, username: e.target.value})}
-                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
-                  placeholder={user.role === 'shop' ? "snapeats" : "2110XXXX"} 
-                  required 
-               />
+              <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">{user.role === 'shop' ? 'Shop ID (e.g. snapeats)' : 'Student ID'}</label>
+              <input
+                type="text"
+                value={loginForm.username}
+                onChange={(e) => setLoginForm({ ...loginForm, username: e.target.value })}
+                className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold"
+                placeholder={user.role === 'shop' ? "snapeats" : "2110XXXX"}
+                required
+              />
             </div>
-            <input 
-              type="password" 
+            <input
+              type="password"
               value={loginForm.password}
-              onChange={(e) => setLoginForm({...loginForm, password: e.target.value})}
-              className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
-              placeholder="Password" 
-              required 
+              onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+              className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold"
+              placeholder="Password"
+              required
             />
             <button type="submit" className="w-full bg-orange-500 py-4 rounded-xl font-black uppercase tracking-widest text-xs hover:bg-orange-400 transition-all shadow-xl shadow-orange-500/20">{isLoginMode ? 'Sign In' : 'Register'}</button>
           </form>
@@ -704,8 +846,8 @@ export default function App() {
     <div className="min-h-screen bg-[#090E17] text-white flex">
       {/* Sidebar - Student */}
       {user.role === 'student' && (
-        <Sidebar 
-          activeView={view} 
+        <Sidebar
+          activeView={view}
           activeShopId={selectedShopId}
           onSelectDashboard={() => { setView('student-dash'); setSelectedShopId(null); }}
           onSelectShop={(id) => navigateToShop(id)}
@@ -722,28 +864,28 @@ export default function App() {
             <span className="text-xl font-black tracking-tight text-white uppercase truncate" title={user.id}>{user.id}</span>
           </div>
           <nav className="flex-1 px-4 py-4 space-y-4">
-            <button 
+            <button
               onClick={() => setShopView('orders')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${shopView === 'orders' ? 'bg-orange-500 text-white' : 'text-gray-400'}`}
             >
               <HomeIcon />
               Active Orders
             </button>
-            <button 
+            <button
               onClick={() => setShopView('menu')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${shopView === 'menu' ? 'bg-orange-500 text-white' : 'text-gray-400'}`}
             >
               <EditIcon />
               Edit Menu
             </button>
-            <button 
+            <button
               onClick={() => setShopView('history')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${shopView === 'history' ? 'bg-orange-500 text-white' : 'text-gray-400'}`}
             >
               <HistoryIcon />
               Order History
             </button>
-            <button 
+            <button
               onClick={() => setShopView('reviews')}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-bold text-sm transition-all ${shopView === 'reviews' ? 'bg-orange-500 text-white' : 'text-gray-400'}`}
             >
@@ -767,7 +909,7 @@ export default function App() {
           <div className="flex items-center gap-4">
             {user.role === 'student' && (
               <div className="w-10 h-10 bg-orange-500/10 rounded-xl flex items-center justify-center text-orange-500 relative">
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z"/></svg>
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" /></svg>
                 {cart.length > 0 && <span className="absolute -top-1 -right-1 bg-orange-500 text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center">{cart.length}</span>}
               </div>
             )}
@@ -824,7 +966,7 @@ export default function App() {
                     {cart.map(item => <div key={item._id} className="flex justify-between font-bold"><span>{item.quantity}x {item.name}</span><span>₹{item.price * item.quantity}</span></div>)}
                     <div className="pt-4 border-t border-white/5">
                       <div className="flex justify-between text-2xl font-black mb-6"><span>Total</span><span>₹{cartTotal}</span></div>
-                      <button onClick={handlePlaceOrder} className="w-full bg-orange-500 py-4 rounded-xl font-black uppercase text-xs">Checkout</button>
+                      <button onClick={handleCheckout} className="w-full bg-gradient-to-r from-orange-500 to-amber-500 py-4 rounded-xl font-black uppercase text-xs tracking-widest shadow-lg shadow-orange-500/30 hover:from-orange-400 hover:to-amber-400 transition-all">💳 Pay & Checkout</button>
                     </div>
                   </div>
                 )}
@@ -865,9 +1007,9 @@ export default function App() {
                     <div className="flex justify-between items-center pt-3 border-t border-white/5">
                       <span className="text-lg font-black">₹{order.total}</span>
                       <div className="flex items-center gap-4">
-                        {order.status === 'completed' && userReviews[order._id] && 
+                        {order.status === 'completed' && userReviews[order._id] &&
                           (Date.now() - new Date(userReviews[order._id].createdAt).getTime()) < 24 * 60 * 60 * 1000 && (
-                            <button 
+                            <button
                               onClick={() => handleEditReview(order._id)}
                               className="text-[10px] font-black text-orange-500 uppercase tracking-widest hover:text-orange-400 transition-colors"
                             >
@@ -919,13 +1061,13 @@ export default function App() {
                         {/* PENDING → Accept or Reject */}
                         {order.status === 'pending' && acceptingOrderId !== order._id && (
                           <>
-                            <button 
+                            <button
                               onClick={() => { setAcceptingOrderId(order._id); setPrepTime(''); }}
                               className="bg-green-500 px-6 py-3 rounded-xl font-black uppercase text-xs hover:bg-green-400 transition-all"
                             >
                               Accept
                             </button>
-                            <button 
+                            <button
                               onClick={() => handleRejectOrder(order._id)}
                               className="bg-red-500/10 text-red-500 px-6 py-3 rounded-xl font-black uppercase text-xs hover:bg-red-500 hover:text-white transition-all"
                             >
@@ -937,21 +1079,21 @@ export default function App() {
                         {/* Accept form with prep time input */}
                         {order.status === 'pending' && acceptingOrderId === order._id && (
                           <div className="flex items-center gap-3">
-                            <input 
+                            <input
                               type="number" min="1" max="120" placeholder="Min"
                               value={prepTime}
                               onChange={(e) => setPrepTime(e.target.value)}
                               className="w-20 px-3 py-3 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-green-500 transition-all font-bold text-sm text-center"
                               autoFocus
                             />
-                            <button 
+                            <button
                               onClick={() => handleAcceptOrder(order._id)}
                               disabled={!prepTime || parseInt(prepTime) <= 0}
                               className="bg-green-500 px-5 py-3 rounded-xl font-black uppercase text-xs hover:bg-green-400 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
                             >
                               Confirm
                             </button>
-                            <button 
+                            <button
                               onClick={() => setAcceptingOrderId(null)}
                               className="bg-white/5 px-4 py-3 rounded-xl font-black uppercase text-xs hover:bg-white/10 transition-all"
                             >
@@ -962,7 +1104,7 @@ export default function App() {
 
                         {/* ACCEPTED / PREPARING → Mark Ready */}
                         {['accepted', 'preparing'].includes(order.status) && (
-                          <button 
+                          <button
                             onClick={() => updateOrderStatus(order._id, 'ready')}
                             className="bg-blue-500 px-6 py-3 rounded-xl font-black uppercase text-xs hover:bg-blue-400 transition-all"
                           >
@@ -1029,7 +1171,7 @@ export default function App() {
             <div className="max-w-4xl space-y-6">
               <div className="flex justify-between items-center mb-10">
                 <h3 className="text-2xl font-black">Manage Menu</h3>
-                <button 
+                <button
                   onClick={() => setEditingItem({ name: '', price: '', description: '', isAvailable: true, isNew: true })}
                   className="bg-orange-500 px-6 py-3 rounded-xl font-black uppercase text-xs"
                 >
@@ -1079,14 +1221,14 @@ export default function App() {
                           {(shopReviews.reduce((s, r) => s + r.rating, 0) / shopReviews.length).toFixed(1)}
                         </p>
                         <div className="flex justify-center mt-2">
-                          {[1,2,3,4,5].map(s => (
+                          {[1, 2, 3, 4, 5].map(s => (
                             <StarIcon key={s} filled={s <= Math.round(shopReviews.reduce((a, r) => a + r.rating, 0) / shopReviews.length)} size="w-5 h-5" />
                           ))}
                         </div>
                         <p className="text-gray-500 text-xs font-bold mt-2">{shopReviews.length} review{shopReviews.length !== 1 ? 's' : ''}</p>
                       </div>
                       <div className="flex-1 space-y-1">
-                        {[5,4,3,2,1].map(star => {
+                        {[5, 4, 3, 2, 1].map(star => {
                           const count = shopReviews.filter(r => r.rating === star).length;
                           const pct = shopReviews.length > 0 ? (count / shopReviews.length * 100) : 0;
                           return (
@@ -1094,7 +1236,7 @@ export default function App() {
                               <span className="text-xs font-bold text-gray-400 w-3">{star}</span>
                               <StarIcon filled size="w-3.5 h-3.5" />
                               <div className="flex-1 bg-white/5 rounded-full h-2 overflow-hidden">
-                                <div className="bg-yellow-400 h-full rounded-full transition-all duration-500" style={{width: `${pct}%`}} />
+                                <div className="bg-yellow-400 h-full rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
                               </div>
                               <span className="text-[10px] font-bold text-gray-500 w-8 text-right">{count}</span>
                             </div>
@@ -1113,7 +1255,7 @@ export default function App() {
                         <div>
                           <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest block">{review.studentId}</span>
                           <div className="flex items-center gap-1 mt-1">
-                            {[1,2,3,4,5].map(s => <StarIcon key={s} filled={s <= review.rating} size="w-4 h-4" />)}
+                            {[1, 2, 3, 4, 5].map(s => <StarIcon key={s} filled={s <= review.rating} size="w-4 h-4" />)}
                           </div>
                         </div>
                         <span className="text-gray-500 text-xs font-bold">
@@ -1181,37 +1323,37 @@ export default function App() {
             <div className="space-y-4">
               <div>
                 <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Item Name</label>
-                <input 
-                  autoFocus required type="text" 
+                <input
+                  autoFocus required type="text"
                   value={editingItem.name}
-                  onChange={(e) => setEditingItem({...editingItem, name: e.target.value})}
-                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
+                  onChange={(e) => setEditingItem({ ...editingItem, name: e.target.value })}
+                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold"
                 />
               </div>
               <div>
                 <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Description</label>
-                <textarea 
+                <textarea
                   value={editingItem.description || ''}
-                  onChange={(e) => setEditingItem({...editingItem, description: e.target.value})}
+                  onChange={(e) => setEditingItem({ ...editingItem, description: e.target.value })}
                   rows="2"
-                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold resize-none" 
+                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold resize-none"
                   placeholder="Optional description..."
                 />
               </div>
               <div>
                 <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest ml-1">Price (₹)</label>
-                <input 
-                  required type="number" 
+                <input
+                  required type="number"
                   value={editingItem.price}
-                  onChange={(e) => setEditingItem({...editingItem, price: e.target.value})}
-                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold" 
+                  onChange={(e) => setEditingItem({ ...editingItem, price: e.target.value })}
+                  className="w-full px-6 py-4 bg-[#090E17] border border-white/10 rounded-xl outline-none focus:border-orange-500 transition-all font-bold"
                 />
               </div>
               <div className="flex items-center justify-between px-1">
                 <label className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Available</label>
-                <button 
+                <button
                   type="button"
-                  onClick={() => setEditingItem({...editingItem, isAvailable: !editingItem.isAvailable})}
+                  onClick={() => setEditingItem({ ...editingItem, isAvailable: !editingItem.isAvailable })}
                   className={`w-12 h-7 rounded-full transition-all duration-300 relative ${editingItem.isAvailable !== false ? 'bg-green-500' : 'bg-gray-700'}`}
                 >
                   <span className={`absolute top-1 w-5 h-5 rounded-full bg-white transition-all duration-300 ${editingItem.isAvailable !== false ? 'left-6' : 'left-1'}`}></span>
@@ -1287,7 +1429,7 @@ export default function App() {
           <div className="bg-[#111727] rounded-[2.5rem] border border-white/5 w-full max-w-md shadow-2xl shadow-black/50 overflow-hidden">
             {/* Header gradient bar */}
             <div className="h-1.5 bg-gradient-to-r from-yellow-400 via-orange-500 to-red-500" />
-            
+
             <div className="p-10">
               {/* Step: Rate */}
               {reviewStep === 'rate' && (
@@ -1297,10 +1439,10 @@ export default function App() {
                     How was your order{orders.find(o => o._id === reviewOrderId)?.shopId ? ` from ${shopDetails[orders.find(o => o._id === reviewOrderId)?.shopId]?.name || orders.find(o => o._id === reviewOrderId)?.shopId}` : ''}?
                   </h3>
                   <p className="text-gray-500 text-sm font-bold mb-8">Your feedback helps improve our service</p>
-                  
+
                   {/* Star Selector */}
                   <div className="flex justify-center gap-2 mb-8">
-                    {[1,2,3,4,5].map(star => (
+                    {[1, 2, 3, 4, 5].map(star => (
                       <StarIcon
                         key={star}
                         filled={star <= (reviewHoverRating || reviewRating)}
@@ -1379,11 +1521,10 @@ export default function App() {
                       <button
                         key={issue}
                         onClick={() => toggleIssue(issue)}
-                        className={`py-4 px-4 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${
-                          reviewIssues.includes(issue)
+                        className={`py-4 px-4 rounded-xl font-black text-xs uppercase tracking-widest transition-all ${reviewIssues.includes(issue)
                             ? 'bg-red-500 text-white shadow-lg shadow-red-500/30'
                             : 'bg-white/5 text-gray-400 hover:bg-white/10'
-                        }`}
+                          }`}
                       >
                         {issue}
                       </button>
@@ -1433,6 +1574,240 @@ export default function App() {
                   >
                     Done
                   </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ===== AI CHATBOT (Student only) ===== */}
+      {user.role === 'student' && view !== 'login' && (
+        <Chatbot user={user} selectedShopId={selectedShopId} cart={cart} orders={orders} />
+      )}
+
+      {/* ===== UPI PAYMENT MODAL ===== */}
+      {showPaymentModal && (
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-lg z-[300] flex items-center justify-center p-4">
+          <div className="bg-[#111727] rounded-[2.5rem] border border-white/5 w-full max-w-md shadow-2xl shadow-black/60 overflow-hidden max-h-[90vh] flex flex-col">
+            {/* Header gradient bar */}
+            <div className="h-1.5 bg-gradient-to-r from-green-400 via-emerald-500 to-teal-500 flex-shrink-0" />
+
+            <div className="p-8 overflow-y-auto flex-1">
+              {/* Step: Select UPI App */}
+              {paymentStep === 'select' && (
+                <div>
+                  <div className="text-center mb-5">
+                    <div className="w-12 h-12 bg-gradient-to-br from-green-400 to-emerald-600 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-lg shadow-green-500/30">
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                    </div>
+                    <h3 className="text-xl font-black tracking-tight mb-0.5">Payment</h3>
+                    <p className="text-gray-500 text-xs font-bold">Choose your preferred payment method</p>
+                  </div>
+
+                  {/* Order Summary */}
+                  <div className="bg-[#090E17] rounded-2xl p-4 mb-4 border border-white/5">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Order Summary</span>
+                      <span className="text-[10px] font-black text-orange-500 uppercase tracking-widest">{shopDetails[selectedShopId]?.name}</span>
+                    </div>
+                    {cart.map(item => (
+                      <div key={item._id} className="flex justify-between text-sm py-0.5">
+                        <span className="text-gray-400 font-bold">{item.quantity}x {item.name}</span>
+                        <span className="text-white font-bold">₹{item.price * item.quantity}</span>
+                      </div>
+                    ))}
+                    <div className="border-t border-white/5 mt-2 pt-2 flex justify-between">
+                      <span className="font-black">Total</span>
+                      <span className="font-black text-green-400">₹{cartTotal}</span>
+                    </div>
+                  </div>
+
+                  {/* Payment Methods Grid */}
+                  <div className="grid grid-cols-5 gap-2 mb-4">
+                    {[
+                      { id: 'gpay', name: 'GPay', color: 'from-blue-500 to-blue-600', icon: '💙' },
+                      { id: 'phonepe', name: 'PhonePe', color: 'from-purple-500 to-purple-700', icon: '💜' },
+                      { id: 'paytm', name: 'Paytm', color: 'from-sky-400 to-blue-500', icon: '🩵' },
+                      { id: 'other', name: 'Other UPI', color: 'from-gray-500 to-gray-600', icon: '📱' },
+                      { id: 'counter', name: 'Counter', color: 'from-amber-500 to-orange-600', icon: '🏪' },
+                    ].map(app => (
+                      <button
+                        key={app.id}
+                        onClick={() => setSelectedUpiApp(app.id)}
+                        className={`py-3 px-1 rounded-2xl flex flex-col items-center gap-1.5 transition-all duration-300 border-2 ${selectedUpiApp === app.id
+                            ? (app.id === 'counter' ? 'border-orange-400 bg-orange-400/10 scale-105 shadow-lg shadow-orange-500/20' : 'border-green-400 bg-green-400/10 scale-105 shadow-lg shadow-green-500/20')
+                            : 'border-transparent bg-white/5 hover:bg-white/10'
+                          }`}
+                      >
+                        <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${app.color} flex items-center justify-center text-base shadow-md`}>
+                          {app.icon}
+                        </div>
+                        <span className="text-[9px] font-black uppercase tracking-wider text-gray-300">{app.name}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* QR Code + UPI ID (hidden when counter selected) */}
+                  {selectedUpiApp !== 'counter' && (
+                    <div className="flex items-center gap-4 bg-[#090E17] rounded-2xl p-4 mb-4 border border-white/5">
+                      <div className="bg-white p-2 rounded-xl flex-shrink-0">
+                        <div className="w-24 h-24 relative">
+                          <div className="absolute inset-0 grid grid-cols-8 grid-rows-8 gap-px">
+                            {Array.from({ length: 64 }).map((_, i) => (
+                              <div
+                                key={i}
+                                className={`rounded-sm ${(i < 24 && (i % 8 < 3 || i < 3)) ||
+                                    (i >= 40 && i % 8 < 3) ||
+                                    (i % 8 >= 5 && i < 24) ||
+                                    Math.random() > 0.5
+                                    ? 'bg-gray-900'
+                                    : 'bg-white'
+                                  }`}
+                              />
+                            ))}
+                          </div>
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="bg-white p-0.5 rounded">
+                              <div className="w-6 h-6 bg-gradient-to-br from-green-400 to-emerald-600 rounded flex items-center justify-center">
+                                <span className="text-white font-black text-[8px]">BU</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex-1 text-center">
+                        <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest mb-1">Pay to UPI ID</p>
+                        <p className="text-green-400 font-black text-base tracking-wide">bueats@upi</p>
+                        <p className="text-[9px] text-gray-600 font-bold mt-2 uppercase tracking-widest">Scan QR or select app</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Counter payment info */}
+                  {selectedUpiApp === 'counter' && (
+                    <div className="bg-[#090E17] rounded-2xl p-5 mb-4 border border-amber-500/20 text-center">
+                      <div className="text-3xl mb-2">🏪</div>
+                      <p className="text-amber-400 font-black text-sm mb-1">Pay at the Counter</p>
+                      <p className="text-gray-500 text-xs font-bold">Visit {shopDetails[selectedShopId]?.name} and pay ₹{cartTotal} when you pick up your order</p>
+                    </div>
+                  )}
+
+                  {/* Action Buttons */}
+                  <div className="flex gap-4">
+                    <button
+                      onClick={closePaymentModal}
+                      className="flex-1 bg-white/5 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition-all"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={selectedUpiApp === 'counter' ? handleCounterPayment : handleUpiPayment}
+                      disabled={!selectedUpiApp}
+                      className={`flex-1 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest transition-all disabled:opacity-30 disabled:cursor-not-allowed shadow-lg ${selectedUpiApp === 'counter'
+                          ? 'bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 shadow-orange-500/20'
+                          : 'bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-400 hover:to-emerald-400 shadow-green-500/20'
+                        }`}
+                    >
+                      {selectedUpiApp === 'counter' ? `Place Order · ₹${cartTotal}` : `Pay ₹${cartTotal}`}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Step: Processing */}
+              {paymentStep === 'processing' && (
+                <div className="text-center">
+                  <div className="relative w-24 h-24 mx-auto mb-8">
+                    {/* Spinning ring */}
+                    <div className="absolute inset-0 border-4 border-green-500/20 rounded-full" />
+                    <div className="absolute inset-0 border-4 border-transparent border-t-green-400 rounded-full animate-spin" />
+                    {/* Inner pulse */}
+                    <div className="absolute inset-3 bg-green-500/10 rounded-full animate-pulse flex items-center justify-center">
+                      <svg className="w-8 h-8 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                      </svg>
+                    </div>
+                  </div>
+                  <h3 className="text-2xl font-black tracking-tight mb-2">Processing Payment</h3>
+                  <p className="text-gray-400 font-bold text-sm mb-2">Complete the payment in your UPI app</p>
+                  <div className="flex items-center justify-center gap-2 mb-6">
+                    <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+                    <span className="text-green-400 font-black text-sm">
+                      {paymentTimer > 0 ? `Waiting... ${paymentTimer}s` : 'Verifying...'}
+                    </span>
+                  </div>
+                  {transactionId && (
+                    <div className="bg-[#090E17] rounded-xl p-3 border border-white/5">
+                      <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest">Transaction ID</p>
+                      <p className="text-white font-bold text-sm mt-1">{transactionId}</p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Step: Success */}
+              {paymentStep === 'success' && (
+                <div className="text-center">
+                  <div className="relative w-24 h-24 mx-auto mb-6">
+                    <div className="absolute inset-0 bg-green-500/20 rounded-full animate-ping" style={{ animationDuration: '1.5s' }} />
+                    <div className="relative w-full h-full bg-gradient-to-br from-green-400 to-emerald-600 rounded-full flex items-center justify-center shadow-2xl shadow-green-500/40">
+                      <svg className="w-12 h-12 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M5 13l4 4L19 7" />
+                      </svg>
+                    </div>
+                  </div>
+                  <h3 className="text-3xl font-black tracking-tight mb-2">{selectedUpiApp === 'counter' ? 'Order Placed!' : 'Payment Successful!'}</h3>
+                  <p className="text-gray-400 font-bold text-sm mb-2">{selectedUpiApp === 'counter' ? `Pay ₹${paidAmount} at the counter` : `₹${paidAmount} paid via UPI`}</p>
+                  {transactionId && (
+                    <p className="text-green-400/60 text-xs font-bold mb-6">Txn: {transactionId}</p>
+                  )}
+                  <div className={`${selectedUpiApp === 'counter' ? 'bg-amber-500/10 border-amber-500/20' : 'bg-green-500/10 border-green-500/20'} border rounded-2xl p-4 mb-8`}>
+                    <p className={`${selectedUpiApp === 'counter' ? 'text-amber-400' : 'text-green-400'} font-black text-sm`}>✓ Order placed at {shopDetails[selectedShopId]?.name}</p>
+                    <p className="text-gray-500 text-xs font-bold mt-1">{selectedUpiApp === 'counter' ? 'Head to the counter to pay & collect' : 'Track your order status in real-time'}</p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      closePaymentModal();
+                      setSelectedShopId(null);
+                      setView('student-dash');
+                    }}
+                    className="w-full bg-gradient-to-r from-green-500 to-emerald-500 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:from-green-400 hover:to-emerald-400 transition-all shadow-lg shadow-green-500/20"
+                  >
+                    Done
+                  </button>
+                </div>
+              )}
+
+              {/* Step: Failed */}
+              {paymentStep === 'failed' && (
+                <div className="text-center">
+                  <div className="w-24 h-24 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+                    <svg className="w-12 h-12 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </div>
+                  <h3 className="text-2xl font-black tracking-tight mb-2">Payment Failed</h3>
+                  <p className="text-gray-400 font-bold text-sm mb-8">Something went wrong. Please try again.</p>
+                  <div className="flex gap-4">
+                    <button
+                      onClick={closePaymentModal}
+                      className="flex-1 bg-white/5 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:bg-white/10 transition-all"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        setPaymentStep('select');
+                        setSelectedUpiApp(null);
+                      }}
+                      className="flex-1 bg-gradient-to-r from-orange-500 to-amber-500 py-4 rounded-xl font-black uppercase text-[10px] tracking-widest hover:from-orange-400 hover:to-amber-400 transition-all shadow-lg shadow-orange-500/20"
+                    >
+                      Retry
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
