@@ -1,12 +1,23 @@
 import express from 'express';
 import Order from '../models/Order.js';
 import authMiddleware from '../middleware/auth.js';
+import Razorpay from 'razorpay';
+import crypto from 'crypto';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const router = express.Router();
 
+// Initialize Razorpay
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET
+});
+
 router.use(authMiddleware);
 
-// Initiate a UPI payment for an order
+// Initiate a Razorpay payment for an order
 router.post('/initiate', async (req, res) => {
   try {
     const { orderId } = req.body;
@@ -26,16 +37,19 @@ router.post('/initiate', async (req, res) => {
       return res.status(400).json({ error: 'Payment already completed' });
     }
 
-    // Generate a simulated transaction ID
-    const transactionId = 'BU' + Date.now().toString(36).toUpperCase() + Math.random().toString(36).substring(2, 6).toUpperCase();
+    // Create Razorpay Order
+    const options = {
+      amount: Math.round(order.total * 100), // amount in the smallest currency unit (paise)
+      currency: "INR",
+      receipt: `receipt_order_${order._id}`,
+    };
 
-    // In production, this would integrate with a real UPI gateway (Razorpay, PhonePe, etc.)
-    // For now, we simulate the payment initiation
+    const rzpOrder = await razorpay.orders.create(options);
+
     res.json({
       orderId: order._id,
       amount: order.total,
-      transactionId,
-      upiDeepLink: `upi://pay?pa=bueats@upi&pn=BuEats&am=${order.total}&tr=${transactionId}&tn=Order%20${order._id.toString().substring(order._id.toString().length - 4)}&cu=INR`,
+      rzpOrderId: rzpOrder.id,
       status: 'initiated'
     });
   } catch (error) {
@@ -44,10 +58,16 @@ router.post('/initiate', async (req, res) => {
   }
 });
 
-// Verify/confirm payment (simulated)
+// Verify Razorpay payment signature
 router.post('/verify', async (req, res) => {
   try {
-    const { orderId, transactionId, paymentMethod } = req.body;
+    const { 
+      orderId, 
+      razorpay_order_id, 
+      razorpay_payment_id, 
+      razorpay_signature,
+      paymentMethod 
+    } = req.body;
     
     if (req.user.role !== 'student') {
       return res.status(403).json({ error: 'Only students can verify payments' });
@@ -60,18 +80,36 @@ router.post('/verify', async (req, res) => {
       return res.status(403).json({ error: 'Not authorized' });
     }
 
-    // In production, verify with the UPI gateway
-    // For simulation, mark as completed
-    order.paymentStatus = 'completed';
-    order.paymentMethod = paymentMethod || 'upi';
-    order.transactionId = transactionId || '';
-    await order.save();
+    // Cash/Counter payment bypasses Razorpay verification
+    if (paymentMethod === 'cash') {
+      order.paymentStatus = 'completed';
+      order.paymentMethod = 'cash';
+      order.transactionId = razorpay_payment_id || 'COUNTER-' + Date.now().toString(36).toUpperCase();
+      await order.save();
+      return res.json({ success: true, order, message: 'Cash payment confirmed' });
+    }
 
-    res.json({
-      success: true,
-      order,
-      message: 'Payment verified successfully'
-    });
+    // Verify signature for Razorpay payments
+    const body = razorpay_order_id + "|" + razorpay_payment_id;
+    const expectedSignature = crypto
+      .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
+      .update(body.toString())
+      .digest("hex");
+
+    if (expectedSignature === razorpay_signature) {
+      order.paymentStatus = 'completed';
+      order.paymentMethod = 'online';
+      order.transactionId = razorpay_payment_id;
+      await order.save();
+
+      res.json({
+        success: true,
+        order,
+        message: 'Payment verified successfully'
+      });
+    } else {
+      res.status(400).json({ error: 'Invalid signature' });
+    }
   } catch (error) {
     console.error('Payment verification error:', error);
     res.status(500).json({ error: 'Failed to verify payment' });

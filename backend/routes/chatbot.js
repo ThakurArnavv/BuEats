@@ -18,9 +18,74 @@ const shopInfo = {
   tuckshop: { name: 'Tuck Shop', tagline: 'Your daily cravings.', rating: '4.0', time: '5-10 min' }
 };
 
-// Store conversation history per user (in-memory)
-const conversationHistory = new Map();
+// Store conversation context per user (in-memory)
+const conversationContext = new Map();
 const MAX_HISTORY = 10;
+
+// Recommendation mappings
+const RECOMMENDATION_LOGIC = {
+  mood: {
+    prompt: "How are you feeling today? 😊",
+    options: [
+      { label: 'Happy 😊', value: 'happy' },
+      { label: 'Sad 😔', value: 'sad' },
+      { label: 'Stressed 😵', value: 'stressed' },
+      { label: 'Tired 😴', value: 'tired' },
+      { label: 'Energetic ⚡', value: 'energetic' },
+      { label: 'Angry 😤', value: 'angry' },
+      { label: 'Chill 😌', value: 'chill' }
+    ],
+    keywords: {
+      happy: ['celebration', 'dessert', 'shake', 'pizza', 'burger', 'party'],
+      sad: ['comfort', 'chocolate', 'dessert', 'coffee', 'ice cream', 'warm'],
+      stressed: ['healthy', 'juice', 'light', 'salad', 'tea', 'fresh'],
+      tired: ['coffee', 'energy', 'protein', 'snack', 'caffeine', 'espresso'],
+      energetic: ['protein', 'smoothie', 'healthy', 'meal', 'bowl', 'power'],
+      angry: ['spicy', 'snack', 'crunch', 'hot', 'chili', 'wings'],
+      chill: ['snack', 'fries', 'mocktail', 'cold', 'beverage', 'sides']
+    }
+  },
+  lifestyle: {
+    prompt: "What type of eater are you? 🍴",
+    options: [
+      { label: 'Gym Person 💪', value: 'gym' },
+      { label: 'Diet Freak 🥗', value: 'diet' },
+      { label: 'Protein Lover 🍗', value: 'protein' },
+      { label: 'Weight Loss 🔥', value: 'weightloss' },
+      { label: 'Bulking 🏋️', value: 'bulking' },
+      { label: 'Healthy Eating 🌿', value: 'healthy' },
+      { label: 'Cheat Day 😈', value: 'cheatday' }
+    ],
+    keywords: {
+      gym: ['protein', 'shake', 'chicken', 'egg', 'healthy', 'lean'],
+      diet: ['salad', 'low calorie', 'light', 'healthy', 'vegan', 'sprouts'],
+      protein: ['chicken', 'egg', 'meat', 'paneer', 'protein', 'steak'],
+      weightloss: ['healthy', 'light', 'low calorie', 'vegetable', 'soup'],
+      bulking: ['calorie', 'protein', 'meal', 'burger', 'rice', 'pasta'],
+      healthy: ['balanced', 'juice', 'salad', 'vegetable', 'fruit'],
+      cheatday: ['burger', 'pizza', 'fries', 'cheese', 'dessert', 'loaded']
+    }
+  },
+  craving: {
+    prompt: "What are you craving right now? 🤤",
+    options: [
+      { label: 'Sweet 🍫', value: 'sweet' },
+      { label: 'Spicy 🌶️', value: 'spicy' },
+      { label: 'Cold 🧊', value: 'cold' },
+      { label: 'Crunchy 🍟', value: 'crunchy' },
+      { label: 'Heavy Meal 🍔', value: 'heavy' },
+      { label: 'Light Snack 🥪', value: 'light' }
+    ],
+    keywords: {
+      sweet: ['dessert', 'chocolate', 'shake', 'ice cream', 'pastry', 'sweet'],
+      spicy: ['spicy', 'hot', 'chili', 'masala', 'peri', 'schezwan'],
+      cold: ['ice', 'cold', 'shake', 'juice', 'mocktail', 'beverage'],
+      crunchy: ['fry', 'crunch', 'crisp', 'chip', 'nuggets', 'fried'],
+      heavy: ['meal', 'biryani', 'rice', 'burger', 'pizza', 'platter'],
+      light: ['snack', 'sandwich', 'wrap', 'finger', 'roll', 'toast']
+    }
+  }
+};
 
 // =====================================================
 // SECTION 1: MongoDB Data Fetchers (shared by both engines)
@@ -106,7 +171,17 @@ function parseSuggestions(text) {
     const suggestions = lastLine.replace('SUGGESTIONS:', '').split('|').map(s => s.trim()).filter(s => s.length > 0 && s.length < 40);
     return { reply: lines.slice(0, -1).join('\n').trim(), suggestions };
   }
-  return { reply: text.trim(), suggestions: ['Show menu', 'Order status', 'Help'] };
+  return { reply: text.trim(), suggestions: ['Show menu', 'Order status', 'Food Assistant', 'Help'] };
+}
+
+function getContext(username) {
+  if (!conversationContext.has(username)) {
+    conversationContext.set(username, {
+      history: [],
+      recommender: { step: null, preferences: {} }
+    });
+  }
+  return conversationContext.get(username);
 }
 
 async function tryGemini(message, username, contextShopId) {
@@ -117,8 +192,8 @@ async function tryGemini(message, username, contextShopId) {
 
   const systemPrompt = buildSystemPrompt(menuData, orderData, username, contextShopId);
 
-  if (!conversationHistory.has(username)) conversationHistory.set(username, []);
-  const history = conversationHistory.get(username);
+  const context = getContext(username);
+  const history = context.history;
 
   const contents = [...history, { role: 'user', parts: [{ text: message }] }];
 
@@ -158,16 +233,17 @@ async function tryGemini(message, username, contextShopId) {
 }
 
 // =====================================================
-// SECTION 3: Regex Fallback Engine (works offline)
+// SECTION 3: Regex & Recommender Engine (works offline)
 // =====================================================
 
 function detectIntent(message) {
   const msg = message.toLowerCase().trim();
   if (/^(hi|hello|hey|sup|yo|hola|howdy|greetings|good\s?(morning|afternoon|evening))/.test(msg)) return 'greeting';
+  if (/assistant|recommend|suggest|what\s*should|best|popular|top|favorite|must\s*try|help\s*choose|mood/i.test(msg)) return 'recommender_start';
+  if (/surprise\s*me|random/i.test(msg)) return 'surprise_me';
   if (/order\s*(status|track|where|update)|where.*(my|the)\s*order|track/i.test(msg)) return 'order_status';
   if (/menu|what.*(available|have|serve|offer)|show.*(items|menu)|food\s*(list|items)/i.test(msg)) return 'menu_browse';
   if (/price|cost|how\s*much|cheapest|expensive|affordable|budget|under\s*\d+/i.test(msg)) return 'price_query';
-  if (/recommend|suggest|what\s*should|best|popular|top|favorite|must\s*try/i.test(msg)) return 'recommend';
   if (/pay|payment|upi|cash|counter|gpay|phonepe|paytm|how\s*to\s*(pay|checkout)/i.test(msg)) return 'payment_help';
   if (/shop|outlet|store|restaurant|which\s*shop|about\s*(snapeats|house|kaathi|tuck)/i.test(msg)) return 'shop_info';
   if (/hour|timing|open|close|when|schedule/i.test(msg)) return 'hours';
@@ -175,6 +251,142 @@ function detectIntent(message) {
   if (/help|support|what\s*can\s*you|commands|features/i.test(msg)) return 'help';
   if (/thank|thanks|bye|goodbye|see\s*you|later/i.test(msg)) return 'farewell';
   return 'fallback';
+}
+
+async function handleGuidedRecommender(username, message, isStart = false) {
+  const context = getContext(username);
+  const recommender = context.recommender;
+
+  // Personalized greetings for low moods
+  const greetings = {
+    sad: "Feeling low? Let me find some comfort food for you ❤️",
+    stressed: "Tough day? Let's get you something refreshing 🌿",
+    angry: "Take a deep breath. Maybe something spicy will help? 🔥",
+    tired: "Low on energy? I'll find you a quick fix! ☕"
+  };
+
+  if (isStart || !recommender.step) {
+    recommender.step = 'mood';
+    recommender.preferences = {};
+    return {
+      reply: "I'm your AI Food Assistant! Let's find the perfect meal for you.\n\n**Step 1: How are you feeling today?**",
+      selectableOptions: RECOMMENDATION_LOGIC.mood.options,
+      suggestions: ['Surprise Me', 'Cancel'],
+      source: 'recommender'
+    };
+  }
+
+  // Handle selections
+  const msgLower = message.toLowerCase();
+  
+  if (recommender.step === 'mood') {
+    const selected = RECOMMENDATION_LOGIC.mood.options.find(o => msgLower.includes(o.value) || msgLower.includes(o.label.toLowerCase()));
+    if (!selected) return { reply: "Please select a mood from the options below:", selectableOptions: RECOMMENDATION_LOGIC.mood.options };
+    
+    recommender.preferences.mood = selected.value;
+    recommender.step = 'lifestyle';
+    let reply = `Glad you're feeling ${selected.value}! ${greetings[selected.value] || ''}\n\n**Step 2: What type of eater are you?**`;
+    return {
+      reply,
+      selectableOptions: RECOMMENDATION_LOGIC.lifestyle.options,
+      suggestions: ['Go Back', 'Cancel'],
+      source: 'recommender'
+    };
+  }
+
+  if (recommender.step === 'lifestyle') {
+    const selected = RECOMMENDATION_LOGIC.lifestyle.options.find(o => msgLower.includes(o.value) || msgLower.includes(o.label.toLowerCase()));
+    if (!selected) return { reply: "Please select a lifestyle preference:", selectableOptions: RECOMMENDATION_LOGIC.lifestyle.options };
+
+    recommender.preferences.lifestyle = selected.value;
+    recommender.step = 'craving';
+    return {
+      reply: "Matches your lifestyle perfectly! 🎯\n\n**Step 3: What are you craving right now?**",
+      selectableOptions: RECOMMENDATION_LOGIC.craving.options,
+      suggestions: ['Go Back', 'Cancel'],
+      source: 'recommender'
+    };
+  }
+
+  if (recommender.step === 'craving') {
+    const selected = RECOMMENDATION_LOGIC.craving.options.find(o => msgLower.includes(o.value) || msgLower.includes(o.label.toLowerCase()));
+    if (!selected) return { reply: "What kind of craving do you have?", selectableOptions: RECOMMENDATION_LOGIC.craving.options };
+
+    recommender.preferences.craving = selected.value;
+    recommender.step = null; // Reset for next time
+
+    // Final recommendation logic
+    const results = await performKeywordSearch(recommender.preferences);
+    const greeting = results.length > 0 ? "Here are my top picks for you! 🌟" : "I couldn't find an exact match, but here's something you might like!";
+    
+    return {
+      reply: `${greeting}\n\nMapping your ${recommender.preferences.mood} mood with a ${recommender.preferences.lifestyle} lifestyle and ${recommender.preferences.craving} cravings...`,
+      recommendedItems: results.slice(0, 3),
+      suggestions: ['Start over', 'Show all menus', 'Help'],
+      source: 'recommender'
+    };
+  }
+
+  return null;
+}
+
+async function performKeywordSearch(prefs) {
+  const keywords = [
+    ...(RECOMMENDATION_LOGIC.mood.keywords[prefs.mood] || []),
+    ...(RECOMMENDATION_LOGIC.lifestyle.keywords[prefs.lifestyle] || []),
+    ...(RECOMMENDATION_LOGIC.craving.keywords[prefs.craving] || [])
+  ];
+
+  // Unique keywords
+  const uniqueKeywords = [...new Set(keywords)];
+  
+  // Search in DB
+  const query = {
+    isAvailable: true,
+    $or: uniqueKeywords.map(k => ({
+      $or: [
+        { name: { $regex: k, $options: 'i' } },
+        { description: { $regex: k, $options: 'i' } }
+      ]
+    }))
+  };
+
+  let items = await Menu.find(query).limit(10);
+  
+  // Scoring / Ranking
+  items = items.map(item => {
+    let score = 0;
+    const itemText = (item.name + ' ' + item.description).toLowerCase();
+    uniqueKeywords.forEach(k => {
+      if (itemText.includes(k.toLowerCase())) score++;
+    });
+    return { ...item.toObject(), score };
+  }).sort((a, b) => b.score - a.score);
+
+  // Fallback if no items found
+  if (items.length === 0) {
+    items = await Menu.find({ isAvailable: true }).limit(3);
+    items = items.map(i => ({ ...i.toObject(), recommendationReason: "Highly rated on campus!" }));
+  } else {
+    items = items.map(i => ({ 
+      ...i, 
+      recommendationReason: `Perfect for your ${prefs.mood} mood and ${prefs.craving} craving!`
+    }));
+  }
+
+  return items;
+}
+
+async function handleSurpriseMe() {
+  const items = await Menu.find({ isAvailable: true });
+  if (items.length === 0) return { reply: "The kitchen is empty right now! 😅" };
+  const random = items[Math.floor(Math.random() * items.length)];
+  return {
+    reply: "🎰 **Surprise!** Here's a random recommendation for you:",
+    recommendedItems: [{ ...random.toObject(), recommendationReason: "Fortune favors the hungry! 🎲" }],
+    suggestions: ['Another surprise', 'Food Assistant', 'Menu'],
+    source: 'recommender'
+  };
 }
 
 function extractShopId(message) {
@@ -284,7 +496,27 @@ router.post('/', authMiddleware, async (req, res) => {
       return res.status(403).json({ error: 'Chatbot is only available for students' });
     }
 
-    // Try Gemini first
+    const context = getContext(username);
+
+    // 1. Check if user is in guided recommender flow
+    if (context.recommender.step && !['cancel', 'quit', 'exit'].includes(message.toLowerCase())) {
+      const result = await handleGuidedRecommender(username, message);
+      if (result) return res.json(result);
+    }
+
+    const intent = detectIntent(message);
+
+    // 2. Explicit triggers for recommender or surprise
+    if (intent === 'recommender_start') {
+      const result = await handleGuidedRecommender(username, message, true);
+      return res.json(result);
+    }
+    if (intent === 'surprise_me') {
+      const result = await handleSurpriseMe();
+      return res.json(result);
+    }
+
+    // 3. Try Gemini next
     let response;
     try {
       response = await tryGemini(message, username, contextShopId);
@@ -292,7 +524,7 @@ router.post('/', authMiddleware, async (req, res) => {
       console.log('Gemini failed, using fallback:', err.message?.substring(0, 100));
     }
 
-    // If Gemini didn't work, use regex fallback
+    // 4. regex fallback
     if (!response) {
       console.log('Using regex fallback engine');
       const fallbackResult = await regexFallback(message, username, contextShopId);

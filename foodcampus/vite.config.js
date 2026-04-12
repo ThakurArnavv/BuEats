@@ -8,6 +8,10 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    allowedHosts: [
+      'stretch-sneak-vigorous.ngrok-free.dev',
+      '.ngrok-free.dev'
+    ],
     proxy: {
       '/api': {
         target: 'http://localhost:5000',

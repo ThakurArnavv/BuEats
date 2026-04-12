@@ -389,19 +389,17 @@ export default function App() {
     return null;
   };
 
-  // Process UPI payment
+  // Process Online (Razorpay) payment
   const handleUpiPayment = async () => {
-    setPaymentStep('processing');
-    setPaymentTimer(30);
-
-    // First place the order
+    // First place the order to get the database order ID
     const newOrder = await handlePlaceOrder();
     if (!newOrder) {
       setPaymentStep('failed');
       return;
     }
 
-    // Initiate payment
+    setPaymentStep('processing');
+
     try {
       const token = localStorage.getItem('token');
       const res = await fetch('/api/payment/initiate', {
@@ -413,12 +411,19 @@ export default function App() {
         body: JSON.stringify({ orderId: newOrder._id })
       });
 
-      if (res.ok) {
-        const data = await res.json();
-        setTransactionId(data.transactionId);
+      if (!res.ok) throw new Error('Order initiation failed');
+      const data = await res.json();
 
-        // Simulate payment processing (in production, poll gateway status)
-        setTimeout(async () => {
+      const options = {
+        key: 'rzp_test_SccEqSa56RdeTY', // Razorpay Key ID
+        amount: data.amount * 100,
+        currency: "INR",
+        name: "BuEats",
+        description: `Order #${newOrder._id.substring(newOrder._id.length - 4)}`,
+        image: "/images/snapeats_pizza.png", // Using an existing image as logo
+        order_id: data.rzpOrderId,
+        handler: async function (response) {
+          // Verify payment signature
           try {
             const verifyRes = await fetch('/api/payment/verify', {
               method: 'POST',
@@ -428,8 +433,9 @@ export default function App() {
               },
               body: JSON.stringify({
                 orderId: newOrder._id,
-                transactionId: data.transactionId,
-                paymentMethod: 'upi'
+                razorpay_order_id: response.razorpay_order_id,
+                razorpay_payment_id: response.razorpay_payment_id,
+                razorpay_signature: response.razorpay_signature
               })
             });
 
@@ -442,14 +448,35 @@ export default function App() {
             } else {
               setPaymentStep('failed');
             }
-          } catch {
+          } catch (err) {
+            console.error("Verification failed", err);
             setPaymentStep('failed');
           }
-        }, 3000);
-      } else {
+        },
+        prefill: {
+          name: user.name,
+          email: `${user.id}@bennett.edu.in`,
+          contact: ""
+        },
+        theme: {
+          color: "#F97316" // orange-500
+        },
+        modal: {
+          ondismiss: function() {
+            setPaymentStep('select');
+          }
+        }
+      };
+
+      const rzp1 = new window.Razorpay(options);
+      rzp1.on('payment.failed', function (response) {
+        console.error(response.error);
         setPaymentStep('failed');
-      }
-    } catch {
+      });
+      rzp1.open();
+
+    } catch (err) {
+      console.error("Payment failed", err);
       setPaymentStep('failed');
     }
   };
@@ -1223,10 +1250,10 @@ export default function App() {
                               </span>
                             </div>
                             <button
-                              onClick={handlePlaceOrder}
+                              onClick={handleCheckout}
                               className="w-full bg-gradient-to-r from-orange-500 to-amber-500 hover:from-orange-400 hover:to-amber-400 py-4 rounded-2xl font-black uppercase text-xs tracking-widest transition-all shadow-lg shadow-orange-500/25 hover:shadow-orange-500/40 hover:scale-[1.02] active:scale-[0.98]"
                             >
-                              🚀 Place Order
+                              🚀 Checkout
                             </button>
                           </div>
                         </div>
@@ -1928,7 +1955,14 @@ export default function App() {
 
       {/* ===== AI CHATBOT (Student only) ===== */}
       {user.role === 'student' && view !== 'login' && (
-        <Chatbot user={user} selectedShopId={selectedShopId} cart={cart} orders={orders} />
+        <Chatbot 
+          user={user} 
+          selectedShopId={selectedShopId} 
+          cart={cart} 
+          orders={orders} 
+          onAddToCart={addToCart} 
+          shopDetails={shopDetails}
+        />
       )}
 
       {/* ===== UPI PAYMENT MODAL ===== */}
