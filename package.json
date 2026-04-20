@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "build": "cd foodcampus && npm install && npm run build",
-    "install-all": "npm install && cd foodcampus && npm install && cd ../backend && npm install"
+    "build": "npm run install-all && cd foodcampus && npm run build",
+    "install-all": "npm install && (cd foodcampus && npm install) && (cd backend && npm install)",
+    "dev": "concurrently \"cd backend && npm run dev\" \"cd foodcampus && npm run dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.1"
   }
 }

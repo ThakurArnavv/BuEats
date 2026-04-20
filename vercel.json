@@ -6,22 +6,19 @@
       "use": "@vercel/node"
     },
     {
-      "src": "foodcampus/package.json",
+      "src": "package.json",
       "use": "@vercel/static-build",
       "config": { "distDir": "foodcampus/dist" }
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/(.*)",
-      "dest": "/backend/server.js"
+      "source": "/api/(.*)",
+      "destination": "backend/server.js"
     },
     {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/foodcampus/dist/index.html"
+      "source": "/(.*)",
+      "destination": "foodcampus/dist/index.html"
     }
   ]
 }
