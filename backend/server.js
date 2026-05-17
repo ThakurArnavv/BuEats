@@ -58,8 +58,10 @@ const connectDB = async () => {
   }
 };
 
-// Connect immediately
-connectDB();
+// Connect immediately (unless in test environment, where setup.js handles it)
+if (process.env.NODE_ENV !== 'test') {
+  connectDB();
+}
 
 // Start local server only when NOT on Vercel
 if (!process.env.VERCEL) {

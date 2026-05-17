@@ -8,6 +8,10 @@ const router = express.Router();
 // Register Route
 router.post('/register', async (req, res) => {
   try {
+    if (!req.body) {
+      return res.status(400).json({ error: 'Request body is missing or invalid' });
+    }
+
     const { username, password, role } = req.body;
 
     if (!username || !password) {
@@ -40,6 +44,10 @@ router.post('/register', async (req, res) => {
 // Login Route
 router.post('/login', async (req, res) => {
   try {
+    if (!req.body) {
+      return res.status(400).json({ error: 'Request body is missing or invalid' });
+    }
+
     const { username, password } = req.body;
 
     if (!username || !password) {
